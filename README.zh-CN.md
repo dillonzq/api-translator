@@ -41,13 +41,6 @@ Go module：`github.com/dillonzq/api-translator`，包名：`translator`。
 go get github.com/dillonzq/api-translator@v0.1.0
 ```
 
-私有仓库需要先配置具有仓库访问权限的 Git 认证，再使用：
-
-```sh
-GOPRIVATE=github.com/dillonzq/api-translator \
-go get github.com/dillonzq/api-translator@v0.1.0
-```
-
 ## 快速开始
 
 以下例子把 Responses 请求转换为 Messages 请求：

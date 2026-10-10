@@ -41,13 +41,6 @@ Callers map external format identifiers to these constants. Only the three value
 go get github.com/dillonzq/api-translator@v0.1.0
 ```
 
-For a private checkout, configure Git authentication for an account with repository access and install with:
-
-```sh
-GOPRIVATE=github.com/dillonzq/api-translator \
-go get github.com/dillonzq/api-translator@v0.1.0
-```
-
 ## Quick start
 
 This example converts a Responses request to Messages:
