@@ -161,6 +161,8 @@ Chat 的引用偏移只计入正文，不包含独立 refusal；Messages 将 ref
 
 `RequestState.Diagnostics()` 报告已知字段损耗。allow/safe/strict 的配置与行为见 README；safe/strict 只拒绝请求阶段的损耗。规则检查明确的协议字段，不递归分析工具参数、结果或 JSON Schema 中的业务数据。
 
+Responses 的函数和自定义工具结果支持混合文本与图片。Responses → Messages 在 `tool_result.content` 中保留图文顺序，纯文本结果仍使用字符串。Responses → Chat 先输出连续的工具回复，再通过标注各 call ID 的额外用户消息承载混合结果；文本同时保留在工具回复及对应图片旁。空消息和 reasoning item 不会打断这组工具回复。
+
 请求可转换支持的图片 URL 和 base64 来源；system 图片及无法表示的工具结果会报错。响应中 Chat → Messages 可转换支持的图片块，Chat → Responses 的非文本输出及未支持的 Messages 内容块会报错。图像生成结果、音频和更多多模态输出尚不支持。未知 Responses item/part 用原始 JSON 检查实际载荷，包含 `result` / `action` 等未建模内容且无法表示时会报错，不静默生成成功的空结果。
 
 logprobs、供应商扩展、历史 compaction 和签名不保证跨协议保留。原生保留字段也不意味着任何上游模型都接受这些内容；调用方负责能力验证。

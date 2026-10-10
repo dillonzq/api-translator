@@ -161,6 +161,8 @@ Page/document-location citations and encrypted citation metadata have no complet
 
 `RequestState.Diagnostics()` reports known field losses. See the README for allow/safe/strict configuration; safe/strict rejection applies only to requests. Rules inspect explicit protocol fields, never business data inside tool inputs, results, or JSON Schema.
 
+Responses function and custom tool outputs can contain mixed text and images. Responses → Messages preserves their order inside `tool_result.content`, retaining the string representation for text-only results. Responses → Chat keeps consecutive tool replies together, then emits mixed results in an additional user message labeled with each call ID; text appears both in the tool reply and alongside its images. Empty messages and reasoning items do not interrupt this grouping.
+
 Requests can map supported image URLs and base64 sources; system images and unrepresentable tool results fail. In responses, Chat → Messages maps supported image blocks, while Chat → Responses non-text output and unsupported Messages blocks fail. Image-generation results, audio, and further multimodal output remain unsupported. Unknown Responses items/parts are checked using original JSON, including unmodeled `result` / `action` payloads. Unrepresentable actual content fails rather than silently producing a successful empty response.
 
 Logprobs, provider extensions, historical compaction, and signatures are not guaranteed across protocols. Preserving a field on a native path does not mean every upstream model accepts it; callers validate capabilities.
