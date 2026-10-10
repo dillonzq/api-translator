@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">api-translator</title>
+  <desc id="desc">Three softly rounded indigo, cyan and teal ribbons form a balanced exchange ring, representing conversion among three API protocols.</desc>
+  <defs>
+    <linearGradient id="indigo" x1="118" y1="210" x2="351" y2="100" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4163EB"/>
+      <stop offset="1" stop-color="#7060EF"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="118" y1="210" x2="351" y2="100" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#078BBF"/>
+      <stop offset="1" stop-color="#22C8DD"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="118" y1="210" x2="351" y2="100" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0D958C"/>
+      <stop offset="1" stop-color="#32C6AA"/>
+    </linearGradient>
+    <path id="ribbon" d="M134 210C125 210 118 203 118 194V186C118 175 124 166 133 160L238 100C249 94 263 94 274 100L306 119L316 103C319 98 323 99 326 104L351 158C354 163 352 166 347 167L283 175C277 176 275 173 279 168L289 151L256 132L150 193V194C150 203 143 210 134 210Z"/>
+  </defs>
+  <use href="#ribbon" fill="url(#indigo)"/>
+  <use href="#ribbon" transform="rotate(120 256 256)" fill="url(#cyan)"/>
+  <use href="#ribbon" transform="rotate(240 256 256)" fill="url(#teal)"/>
+</svg>

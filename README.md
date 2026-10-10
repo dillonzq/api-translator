@@ -1,6 +1,23 @@
 # api-translator
 
-English | [简体中文](README.zh-CN.md)
+<div align="center">
+
+<img src="assets/logo.svg" alt="api-translator logo" width="144" height="144">
+
+**Three API protocols. One Go library.**
+
+**English** · [简体中文](README.zh-CN.md)
+
+[Install](#installation) · [Quick start](#quick-start) · [Streaming](#streaming-responses) · [Protocol docs](docs/protocol-conversion.md) · [Releases](https://github.com/dillonzq/api-translator/releases)
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
+[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-6366f1?style=flat-square)](https://github.com/dillonzq/api-translator/releases/tag/v0.1.0)
+[![Go: 1.26.7+](https://img.shields.io/badge/Go-1.26.7%2B-0891b2?style=flat-square&logo=go&logoColor=white)](go.mod)
+[![Dependencies: standard library](https://img.shields.io/badge/dependencies-standard_library-0d9488?style=flat-square)](go.mod)
+
+</div>
+
+---
 
 A standalone Go library for request, non-streaming response, and SSE conversion between OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages. Uses only the Go standard library and requires Go **1.26.7+**.
 
@@ -18,13 +35,20 @@ All six cross-protocol directions are supported, along with same-protocol reques
 
 Callers map external format identifiers to these constants. Only the three values above are accepted; Gemini and a separate Codex format are unsupported.
 
-## Requests and responses
-
-Install:
+## Installation
 
 ```sh
-go get github.com/dillonzq/api-translator
+go get github.com/dillonzq/api-translator@v0.1.0
 ```
+
+For a private checkout, configure Git authentication for an account with repository access and install with:
+
+```sh
+GOPRIVATE=github.com/dillonzq/api-translator \
+go get github.com/dillonzq/api-translator@v0.1.0
+```
+
+## Quick start
 
 This example converts a Responses request to Messages:
 

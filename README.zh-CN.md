@@ -1,6 +1,23 @@
 # api-translator
 
-[English](README.md) | 简体中文
+<div align="center">
+
+<img src="assets/logo.svg" alt="api-translator Logo" width="144" height="144">
+
+**三种 API 协议，一个 Go 转换库。**
+
+[English](README.md) · **简体中文**
+
+[安装](#安装) · [快速开始](#快速开始) · [流式响应](#流式响应) · [协议文档](docs/protocol-conversion.zh-CN.md) · [版本发布](https://github.com/dillonzq/api-translator/releases)
+
+[![许可证：MIT](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
+[![版本：v0.1.0](https://img.shields.io/badge/release-v0.1.0-6366f1?style=flat-square)](https://github.com/dillonzq/api-translator/releases/tag/v0.1.0)
+[![Go：1.26.7+](https://img.shields.io/badge/Go-1.26.7%2B-0891b2?style=flat-square&logo=go&logoColor=white)](go.mod)
+[![依赖：标准库](https://img.shields.io/badge/dependencies-standard_library-0d9488?style=flat-square)](go.mod)
+
+</div>
+
+---
 
 独立的 Go 协议转换库，支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages 之间的请求、普通响应及 SSE 转换。仅依赖 Go 标准库，要求 Go **1.26.7+**。
 
@@ -18,13 +35,20 @@ Go module：`github.com/dillonzq/api-translator`，包名：`translator`。
 
 使用方将外部格式标识映射到本库常量。当前仅接受以上三种格式值，不支持 Gemini 或独立的 Codex 格式。
 
-## 请求与响应
-
-安装：
+## 安装
 
 ```sh
-go get github.com/dillonzq/api-translator
+go get github.com/dillonzq/api-translator@v0.1.0
 ```
+
+私有仓库需要先配置具有仓库访问权限的 Git 认证，再使用：
+
+```sh
+GOPRIVATE=github.com/dillonzq/api-translator \
+go get github.com/dillonzq/api-translator@v0.1.0
+```
+
+## 快速开始
 
 以下例子把 Responses 请求转换为 Messages 请求：
 
