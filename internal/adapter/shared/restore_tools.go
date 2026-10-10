@@ -1,0 +1,89 @@
+package shared
+
+import "encoding/json"
+
+// RestoreToolItem preserves unmodeled fields and numeric JSON values while
+// restoring a flattened function's namespace, original name, and custom input.
+func RestoreToolItem(raw json.RawMessage, tools *ResponseTools) (json.RawMessage, bool) {
+	var item map[string]json.RawMessage
+	if json.Unmarshal(raw, &item) != nil {
+		return raw, false
+	}
+	var typ, name string
+	json.Unmarshal(item["type"], &typ)
+	json.Unmarshal(item["name"], &name)
+	if typ != "function_call" && typ != "custom_tool_call" {
+		return raw, false
+	}
+	id := tools.Identity(name)
+	changed := id.name != name || id.namespace != "" || id.isCustom
+	if !changed {
+		return raw, false
+	}
+	item["name"], _ = json.Marshal(id.name)
+	if id.namespace != "" {
+		item["namespace"], _ = json.Marshal(id.namespace)
+	}
+	if id.isCustom && typ == "function_call" {
+		var args string
+		json.Unmarshal(item["arguments"], &args)
+		item["type"] = json.RawMessage(`"custom_tool_call"`)
+		item["input"], _ = json.Marshal(UnwrapCustomToolInput(args))
+		delete(item, "arguments")
+	}
+	out, err := json.Marshal(item)
+	if err != nil {
+		return raw, false
+	}
+	return out, true
+}
+func RestoreResponseTools(body []byte, tools *ResponseTools) []byte {
+	var doc map[string]json.RawMessage
+	if json.Unmarshal(body, &doc) != nil {
+		return body
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(doc["output"], &items) != nil {
+		return body
+	}
+	changed := false
+	for i, item := range items {
+		restored, ok := RestoreToolItem(item, tools)
+		if ok {
+			items[i] = restored
+			changed = true
+		}
+	}
+	if !changed {
+		return body
+	}
+	doc["output"], _ = json.Marshal(items)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// RestoreToolEventIdentity rewrites optional event names without changing the
+// event's argument delta, sequence number, or other unmodeled fields.
+func RestoreToolEventIdentity(payload []byte, tools *ResponseTools) (map[string]json.RawMessage, bool) {
+	var doc map[string]json.RawMessage
+	if json.Unmarshal(payload, &doc) != nil {
+		return nil, false
+	}
+	var name string
+	json.Unmarshal(doc["name"], &name)
+	if name == "" {
+		return doc, false
+	}
+	identity := tools.Identity(name)
+	if identity.name == name && identity.namespace == "" {
+		return doc, false
+	}
+	doc["name"], _ = json.Marshal(identity.name)
+	if identity.namespace != "" {
+		doc["namespace"], _ = json.Marshal(identity.namespace)
+	}
+	return doc, true
+}
