@@ -11,7 +11,7 @@
 [Install](#installation) · [Quick start](#quick-start) · [Streaming](#streaming-responses) · [Protocol docs](docs/protocol-conversion.md) · [Releases](https://github.com/dillonzq/api-translator/releases)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
-[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-6366f1?style=flat-square)](https://github.com/dillonzq/api-translator/releases/tag/v0.1.0)
+[![Release: v0.2.0](https://img.shields.io/badge/release-v0.2.0-6366f1?style=flat-square)](https://github.com/dillonzq/api-translator/releases/tag/v0.2.0)
 [![Go: 1.26.7+](https://img.shields.io/badge/Go-1.26.7%2B-0891b2?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![Dependencies: standard library](https://img.shields.io/badge/dependencies-standard_library-0d9488?style=flat-square)](go.mod)
 
@@ -38,7 +38,7 @@ Callers map external format identifiers to these constants. Only the three value
 ## Installation
 
 ```sh
-go get github.com/dillonzq/api-translator@v0.1.0
+go get github.com/dillonzq/api-translator@v0.2.0
 ```
 
 ## Quick start
@@ -81,6 +81,23 @@ outputBody, err := translator.ConvertResponse(
 
 Use a separate `RequestState` for each request. Its zero value is usable. Responses requests converted to another protocol require state to restore tool names, namespaces, and custom identities. Other cases without mappings or diagnostics may use `nil`. Do not reuse or mutate state concurrently across requests; call each converter sequentially.
 
+### Native Responses tool normalization
+
+For an upstream using Responses but requiring function tools, opt in explicitly:
+
+```go
+state := translator.NewRequestState()
+body, err := translator.NormalizeResponsesRequest(payload, state)
+// Check err; optionally rewrite model with ConvertRequest, then send body.
+// Pass the same state to response or stream conversion.
+```
+
+This merges `additional_tools`, flattens namespaces, wraps custom tools and historical calls, rewrites `tool_choice` (including `allowed_tools`), and registers identities for response restoration. Unknown fields, exact JSON numbers, tool-result images, and top-level hosted tools are preserved; callers check upstream hosted-tool support. Nested namespaces and hosted tools inside namespaces fail. Custom `format` constraints cannot be retained as function tools: they produce a semantic loss diagnostic, rejected by Safe/Strict policies. Failed normalization does not commit new identity mappings. Same-protocol `ConvertRequest` still only rewrites the model.
+
+These APIs are available starting with `v0.2.0`.
+
+Repeated declarations of the same tool identity keep the first declaration. References in history and `tool_choice` must use original names and namespaces; conflicting identities that flatten to the same wire name are rejected.
+
 ## Streaming responses
 
 ```go
@@ -97,6 +114,27 @@ tail, err := stream.Finish()
 `Finish` checks that a valid terminal signal arrived before EOF. Once conversion fails, subsequent `Feed` / `Finish` calls continue returning an error without emitting successful completion. A call may return both completed events and an error; preserve their order and stop further normal conversion.
 
 Callers own HTTP, authentication, network reads, cancellation, retries, and model capability checks.
+
+### Hosts that frame SSE themselves
+
+If a host such as CPA's Chat Completions handler expects raw JSON and adds its own `data:` and `[DONE]`, unframe converter output with a zero-value `SSEDecoder`:
+
+```go
+var decoder translator.SSEDecoder
+for _, frame := range events {
+    for _, event := range decoder.Feed(frame) {
+        if event.Done {
+            continue // The host emits [DONE] once.
+        }
+        // Send event.Data to the host without adding data:.
+    }
+}
+// After all converter output, including stream.Finish's tail, call decoder.Finish().
+```
+
+The decoder supports arbitrary chunks, multiline data, and LF/CRLF/CR separators. It skips comments, preserves the event name in `Event`, and does not parse JSON. `Done` identifies only `[DONE]`, not Responses/Messages completion. `decoder.Finish()` flushes an event lacking its final separator; process its return value too. Protocol completion validation and error handling remain the responsibility of `StreamConverter`.
+
+Empty `data:` events are retained, including when flushed at EOF.
 
 ## Loss diagnostics and errors
 

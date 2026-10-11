@@ -11,7 +11,7 @@
 [安装](#安装) · [快速开始](#快速开始) · [流式响应](#流式响应) · [协议文档](docs/protocol-conversion.zh-CN.md) · [版本发布](https://github.com/dillonzq/api-translator/releases)
 
 [![许可证：MIT](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
-[![版本：v0.1.0](https://img.shields.io/badge/release-v0.1.0-6366f1?style=flat-square)](https://github.com/dillonzq/api-translator/releases/tag/v0.1.0)
+[![版本：v0.2.0](https://img.shields.io/badge/release-v0.2.0-6366f1?style=flat-square)](https://github.com/dillonzq/api-translator/releases/tag/v0.2.0)
 [![Go：1.26.7+](https://img.shields.io/badge/Go-1.26.7%2B-0891b2?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![依赖：标准库](https://img.shields.io/badge/dependencies-standard_library-0d9488?style=flat-square)](go.mod)
 
@@ -38,7 +38,7 @@ Go module：`github.com/dillonzq/api-translator`，包名：`translator`。
 ## 安装
 
 ```sh
-go get github.com/dillonzq/api-translator@v0.1.0
+go get github.com/dillonzq/api-translator@v0.2.0
 ```
 
 ## 快速开始
@@ -81,6 +81,23 @@ outputBody, err := translator.ConvertResponse(
 
 每次请求使用独立的 `RequestState`。其零值可用；Responses 请求转换到其他协议时必须传入状态，用于恢复工具名称、namespace 和 custom 身份。其他无映射、无诊断需求的场景允许 `nil`。不要跨请求复用或并发修改状态，同一转换器也应顺序调用。
 
+### 原生 Responses 工具规范化
+
+当上游接收 Responses 协议但要求普通函数工具时，显式调用：
+
+```go
+state := translator.NewRequestState()
+body, err := translator.NormalizeResponsesRequest(payload, state)
+// 检查 err，按需使用 ConvertRequest 改写 model，再发送 body。
+// 普通响应或流式响应转换继续传入同一份 state。
+```
+
+该入口合并 `additional_tools`，展开 namespace 工具，包装 custom 工具及历史调用，改写 `tool_choice`（包括 `allowed_tools`），并登记响应恢复所需的身份。未知字段、精确 JSON 数值、工具结果图片及顶层托管工具保留；调用方负责判断上游是否支持托管工具。嵌套 namespace 和 namespace 内的托管工具会报错。custom 的 `format` 约束无法在函数工具中保留，会记录语义损耗；Safe/Strict 策略拒绝此损耗。失败不会提交新的工具身份映射。原有同协议 `ConvertRequest` 仍仅改写模型。
+
+这些接口从 `v0.2.0` 起可用。
+
+同一工具身份的重复声明保留首次声明。历史调用和 `tool_choice` 中的引用应使用原始名称及 namespace；不同身份展开后名称冲突时会报错。
+
 ## 流式响应
 
 ```go
@@ -97,6 +114,27 @@ tail, err := stream.Finish()
 `Finish` 校验 EOF 前是否收到有效终止信号。转换失败后，后续 `Feed` / `Finish` 会继续返回错误，不补发成功结束。一次调用可能同时返回已完成的事件和错误；调用方应保留事件顺序，并停止后续正常转换。
 
 HTTP、鉴权、网络读取、取消、重试及模型能力判断由调用方负责。
+
+### 宿主自行包装 SSE
+
+若宿主（例如 CPA 的 Chat Completions 处理器）要求裸 JSON 并自行添加 `data:` 和 `[DONE]`，使用零值可用的 `SSEDecoder` 拆除库输出的帧：
+
+```go
+var decoder translator.SSEDecoder
+for _, frame := range events {
+    for _, event := range decoder.Feed(frame) {
+        if event.Done {
+            continue // 宿主负责发送一次 [DONE]。
+        }
+        // 将 event.Data 交给宿主；不要再次添加 data:。
+    }
+}
+// 所有转换输出（包括 stream.Finish 的 tail）处理后，调用 decoder.Finish()。
+```
+
+解码器支持任意分块、多行 data 及 LF/CRLF/CR，跳过注释，保留事件名 `Event`，不解析 JSON。`Done` 仅识别 `[DONE]`，不代表 Responses/Messages 的协议终止。`decoder.Finish()` 刷出未带最终分隔符的事件，返回值也需处理；协议结束校验及错误处理仍由 `StreamConverter` 负责。
+
+空 `data:` 事件也会保留，包括在 EOF 时刷出的空事件。
 
 ## 损耗诊断与错误
 
