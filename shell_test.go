@@ -851,3 +851,61 @@ func TestShellHistoryRejectsNullSkills(t *testing.T) {
 		}
 	}
 }
+
+func TestShellRejectsConflictingCustomHistory(t *testing.T) {
+	sources := []string{
+		`{"tools":[{"type":"shell"}],"input":[{"type":"custom_tool_call","name":"shell","call_id":"old","input":"echo old"}]}`,
+		`{"input":[{"type":"custom_tool_call","name":"shell","call_id":"old","input":"echo old"},{"type":"additional_tools","tools":[{"type":"shell"}]}]}`,
+		`{"input":[{"type":"shell_call","call_id":"c1","action":{"commands":["pwd"]}},{"type":"custom_tool_call","name":"shell","call_id":"old","input":"echo old"}]}`,
+	}
+	for _, target := range []string{FormatResponses, FormatChatCompletions, FormatMessages} {
+		for _, policy := range []LossPolicy{LossPolicyAllow, LossPolicySafe, LossPolicyStrict} {
+			for _, source := range sources {
+				state := NewRequestState()
+				state.Options.LossPolicy = policy
+				if _, err := NormalizeResponsesRequest([]byte(`{"tools":[{"type":"custom","name":"existing"}]}`), state); err != nil {
+					t.Fatal(err)
+				}
+				var out []byte
+				var err *Error
+				if target == FormatResponses {
+					out, err = NormalizeResponsesRequest([]byte(source), state)
+				} else {
+					out, err = ConvertRequest(target, "m", FormatResponses, []byte(source), state)
+				}
+				if err == nil || err.Class != ClassTranslation || out != nil {
+					t.Fatalf("%s/%s accepted conflicting custom shell history: %s %v", target, policy, out, err)
+				}
+				if toolState(state).IsShell("shell") || !toolState(state).IsCustom("existing") {
+					t.Fatal("rejected history changed tool identities")
+				}
+			}
+		}
+	}
+}
+
+func TestShellPreservesNamespacedCustomHistory(t *testing.T) {
+	source := []byte(`{"tools":[{"type":"shell"},{"type":"namespace","name":"old","tools":[{"type":"custom","name":"shell"}]}],"input":[{"type":"custom_tool_call","name":"shell","namespace":"old","call_id":"old1","input":"echo old"}]}`)
+	for _, target := range []string{FormatResponses, FormatChatCompletions, FormatMessages} {
+		state := NewRequestState()
+		var out []byte
+		var err *Error
+		if target == FormatResponses {
+			out, err = NormalizeResponsesRequest(source, state)
+		} else {
+			out, err = ConvertRequest(target, "m", FormatResponses, source, state)
+		}
+		if err != nil || !strings.Contains(string(out), `"name":"old__shell"`) || !toolState(state).IsShell("shell") || !toolState(state).IsCustom("old__shell") {
+			t.Fatalf("%s lost distinct namespaced history: %s %v", target, out, err)
+		}
+		body := []byte(`{"id":"r","object":"response","status":"completed","output":[{"type":"function_call","call_id":"old1","name":"old__shell","arguments":"{\"input\":\"echo old\"}"}]}`)
+		restored, err := ConvertResponse(FormatResponses, FormatResponses, 200, body, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		call := shellObject(t, restored)["output"].([]any)[0].(map[string]any)
+		if call["type"] != "custom_tool_call" || call["namespace"] != "old" || call["name"] != "shell" || call["input"] != "echo old" {
+			t.Fatalf("%s custom history restored as shell: %v", target, call)
+		}
+	}
+}

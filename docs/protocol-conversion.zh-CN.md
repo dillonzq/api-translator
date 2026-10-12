@@ -45,7 +45,7 @@ Custom 工具（包括 `apply_patch`）可转换为使用字符串 `input` 的�
 
 此适配将 Responses 客户端的本地 shell 转成 Chat Completions 或 Messages 上游的函数工具；Responses 上游需显式调用 `NormalizeResponsesRequest`。向 Responses 客户端返回响应时，继续传入同一份 `RequestState`。
 
-本地 `shell` 声明（省略 environment 或指定 `type: "local"`，包括 `{"type":"local","skills":[]}`）转成名为 `shell` 的函数。参数包含必需且非空的 `commands` 数组，以及可选、可为 null 的 `timeout_ms` 和 `max_output_length` 限制。支持省略或空数组形式的本地 `skills`；null 及其他非数组值会被拒绝，非空 skills 和其他无法表示的本地配置会明确报错。shell action 只接受 `commands`、`timeout_ms` 和 `max_output_length`，其他属性会被拒绝。本地 shell 工具不能放在 namespace 中，也不能与名为 `shell` 的普通函数/custom 工具同时声明。
+本地 `shell` 声明（省略 environment 或指定 `type: "local"`，包括 `{"type":"local","skills":[]}`）转成名为 `shell` 的函数。参数包含必需且非空的 `commands` 数组，以及可选、可为 null 的 `timeout_ms` 和 `max_output_length` 限制。支持省略或空数组形式的本地 `skills`；null 及其他非数组值会被拒绝，非空 skills 和其他无法表示的本地配置会明确报错。shell action 只接受 `commands`、`timeout_ms` 和 `max_output_length`，其他属性会被拒绝。本地 shell 工具不能放在 namespace 中，也不能与名为 `shell` 的普通函数/custom 工具同时声明。历史中的无 namespace、名为 `shell` 的 `custom_tool_call` 同样构成冲突，会在登记 shell 身份前被拒绝；带 namespace 的同名 custom 调用仍保持独立。
 
 历史 `shell_call` 转成函数调用。`shell_call_output` 转成 JSON 文本，保留输出顺序、stdout、stderr、退出码和超时结果。若存在 `max_output_length`，文本包含带 `output` 和 `max_output_length` 的对象；否则包含输出数组。Responses 跨协议请求仅在整个转换成功后提交工具身份，失败时仍保留诊断信息。
 

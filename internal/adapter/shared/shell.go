@@ -232,6 +232,13 @@ func normalizeShellDocument(doc rawObject, state *ResponseTools) (bool, *errclas
 	if !used {
 		return false, nil
 	}
+	// A custom call uses a different input contract even if its name matches
+	// the function used to emulate shell. Namespaced custom calls stay distinct.
+	for _, item := range items {
+		if rawString(item, "type") == "custom_tool_call" && rawString(item, "name") == ShellFunctionName && rawString(item, "namespace") == "" {
+			return false, errclass.Translation("shell function name conflicts with custom tool call history")
+		}
+	}
 	id := responseToolIdentity{name: ShellFunctionName, isShell: true}
 	if prev, ok := state.names[ShellFunctionName]; ok && prev != id {
 		return false, errclass.Translation("shell function name collides with another tool")
