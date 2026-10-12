@@ -1217,11 +1217,11 @@ func JoinTexts(parts []map[string]any) string {
 }
 
 // ContentPart is one OpenAI-style content part decoded by
-// DecodeStringOrParts: a text part (ImageURL empty) or an image part
-// carrying its resolved URL.
+// DecodeStringOrParts: text, an image URL, or file/audio/video media.
 type ContentPart struct {
 	Text     string
-	ImageURL string // resolved image URL; empty for text parts
+	ImageURL string     // resolved image URL; empty for text parts
+	Media    *MediaPart // file, audio, or video input
 }
 
 // DecodeStringOrParts is THE shared string-or-parts kernel owning the
@@ -1252,10 +1252,20 @@ func DecodeStringOrParts(raw json.RawMessage, targetLabel string) ([]ContentPart
 	if err := json.Unmarshal(raw, &parts); err != nil {
 		return nil, errclass.Translation("malformed message content: " + err.Error())
 	}
+	var elems []json.RawMessage
+	json.Unmarshal(raw, &elems)
 	var out []ContentPart
-	for _, p := range parts {
+	for i, p := range parts {
 		if !IsContentPartType(p.Type) {
 			return nil, ValidateContentPart(p.Type, targetLabel)
+		}
+		if p.Type == "file" || p.Type == "input_file" || p.Type == "input_audio" || p.Type == "video_url" || p.Type == "input_video" {
+			m, err := decodeMediaPart(elems[i], p.Type)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ContentPart{Media: m})
+			continue
 		}
 		if p.Type == "image_url" || p.Type == "input_image" {
 			url, eErr := OpenAIImageURL(p.ImageURL)
@@ -1275,7 +1285,8 @@ func DecodeStringOrParts(raw json.RawMessage, targetLabel string) ([]ContentPart
 // ClaudeBlocksFromOpenAI normalizes an OpenAI-style content field (JSON
 // string or typed parts) into Anthropic content blocks preserving
 // per-part order (FR-005 multimodal preservation): text parts become
-// text blocks, image parts image sources. THE Claude-blocks kernel for
+// text blocks, image parts image sources, and files document blocks.
+// THE Claude-blocks kernel for
 // every route emitting Anthropic blocks from openai-style content: it
 // owns validation and the empty-input policy — empties dropped uniformly
 // on every route (F5 parity), unknown types rejected descriptively
@@ -1288,6 +1299,14 @@ func ClaudeBlocksFromOpenAI(raw json.RawMessage, target string) ([]map[string]an
 	}
 	var blocks []map[string]any
 	for _, p := range parts {
+		if p.Media != nil {
+			block, err := p.Media.Claude()
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, block)
+			continue
+		}
 		if p.ImageURL != "" {
 			src, eErr := ImageSource(p.ImageURL)
 			if eErr != nil {
@@ -1358,7 +1377,8 @@ func ClaudeReasoningEffort(r *ClaudeRequestRecord) (string, *errclass.Error) {
 // through ClaudeImageURL; tool_use Input and tool_result Result stay raw
 // so each target renderer applies its own vocabulary and policies.
 type ClaudeBlock struct {
-	Kind    string          // text, image, tool_use, tool_result, thinking, redacted_thinking, or an unknown wire type
+	Media   *MediaPart
+	Kind    string          // text, image, document, tool_use, tool_result, thinking, redacted_thinking, or an unknown wire type
 	Text    string          // text blocks
 	URL     string          // image blocks: resolved http(s)/data URL
 	CallID  string          // tool_use "id" / tool_result "tool_use_id"
@@ -1517,6 +1537,12 @@ func decodeClaudeBlocks(raw json.RawMessage) ([]ClaudeBlock, *errclass.Error) {
 			Result: wb.Content, IsError: wb.IsError,
 		}
 		switch wb.Type {
+		case "document":
+			m, err := decodeClaudeDocument(elem)
+			if err != nil {
+				return nil, err
+			}
+			blk.Media = m
 		case "image":
 			if wb.Source == nil {
 				return nil, errclass.Translation("image block missing source")
@@ -1589,7 +1615,7 @@ func UnsupportedInputItemType(itemType string) *errclass.Error {
 // so identical client bodies succeed on every route.
 func IsContentPartType(partType string) bool {
 	switch partType {
-	case "text", "input_text", "output_text", "image_url", "input_image":
+	case "text", "input_text", "output_text", "image_url", "input_image", "file", "input_file", "input_audio", "video_url", "input_video":
 		return true
 	}
 	return false

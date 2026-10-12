@@ -100,6 +100,17 @@ func contentParts(raw json.RawMessage, role string) ([]map[string]any, *errclass
 	}
 	out := make([]map[string]any, 0, len(parts))
 	for _, p := range parts {
+		if p.Media != nil {
+			if role != "user" {
+				return nil, shared.UnsupportedPartType(p.Media.Kind, EndpointPath)
+			}
+			part, err := p.Media.OpenAI(true)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, part)
+			continue
+		}
 		if p.ImageURL != "" {
 			out = append(out, imagePart(p.ImageURL))
 			continue
@@ -331,6 +342,15 @@ func fromClaudeMessages(upstreamModel string, body []byte, ctx ...*shared.Respon
 			switch blk.Kind {
 			case "text":
 				parts = append(parts, textPart(m.Role, blk.Text))
+			case "document":
+				if m.Role != "user" {
+					return nil, shared.UnsupportedPartType(blk.Kind, EndpointPath)
+				}
+				part, err := blk.Media.OpenAI(true)
+				if err != nil {
+					return nil, err
+				}
+				parts = append(parts, part)
 			case "image":
 				parts = append(parts, imagePart(blk.URL))
 			case "tool_use":

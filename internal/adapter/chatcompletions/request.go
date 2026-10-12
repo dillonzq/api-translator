@@ -41,9 +41,12 @@ type imageURLField struct {
 }
 
 type ccContentPart struct {
-	Type     string         `json:"type"`
-	Text     string         `json:"text,omitempty"`
-	ImageURL *imageURLField `json:"image_url,omitempty"`
+	Type       string         `json:"type"`
+	Text       string         `json:"text,omitempty"`
+	ImageURL   *imageURLField `json:"image_url,omitempty"`
+	File       any            `json:"file,omitempty"`
+	InputAudio any            `json:"input_audio,omitempty"`
+	VideoURL   any            `json:"video_url,omitempty"`
 }
 
 type ccMessage struct {
@@ -210,6 +213,12 @@ func claudeUserMessages(m *shared.ClaudeMessageRecord) ([]ccMessage, *errclass.E
 		switch blk.Kind {
 		case "text":
 			parts = append(parts, ccContentPart{Type: "text", Text: blk.Text})
+		case "document":
+			part, err := mediaContentPart(blk.Media)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, part)
 		case "image":
 			parts = append(parts, ccContentPart{Type: "image_url", ImageURL: &imageURLField{URL: blk.URL}})
 		case "tool_result":
@@ -340,6 +349,17 @@ func responsesToChat(upstreamModel string, body []byte, tools *shared.ResponseTo
 	for _, item := range items {
 		switch item.Type {
 		case "message":
+			if item.Role != "user" {
+				parts, err := shared.DecodeStringOrParts(item.Content, EndpointPath)
+				if err != nil {
+					return nil, err
+				}
+				for _, p := range parts {
+					if p.Media != nil {
+						return nil, shared.UnsupportedPartType(p.Media.Kind, EndpointPath)
+					}
+				}
+			}
 			content, eErr := respContent(item.Content)
 			if eErr != nil {
 				return nil, eErr
@@ -403,6 +423,9 @@ func responsesToChat(upstreamModel string, body []byte, tools *shared.ResponseTo
 			var mixed []ccContentPart
 			imageCount := 0
 			for _, p := range parts {
+				if p.Media != nil {
+					return nil, shared.UnsupportedPartType(p.Media.Kind, "tool output")
+				}
 				if p.ImageURL != "" {
 					imageCount++
 					mixed = append(mixed, ccContentPart{Type: "image_url", ImageURL: &imageURLField{URL: p.ImageURL}})
@@ -457,11 +480,19 @@ func respContent(raw json.RawMessage) (any, *errclass.Error) {
 	switch {
 	case len(parts) == 0:
 		return nil, nil
-	case len(parts) == 1 && parts[0].ImageURL == "":
+	case len(parts) == 1 && parts[0].ImageURL == "" && parts[0].Media == nil:
 		return parts[0].Text, nil
 	}
 	out := make([]ccContentPart, 0, len(parts))
 	for _, p := range parts {
+		if p.Media != nil {
+			part, err := mediaContentPart(p.Media)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, part)
+			continue
+		}
 		if p.ImageURL != "" {
 			out = append(out, ccContentPart{Type: "image_url", ImageURL: &imageURLField{URL: p.ImageURL}})
 			continue
@@ -491,4 +522,12 @@ func applyToolChoiceCC(req *ccRequest, kind, name string) {
 		})
 		req.ToolChoice = b
 	}
+}
+
+func mediaContentPart(m *shared.MediaPart) (ccContentPart, *errclass.Error) {
+	part, err := m.OpenAI(false)
+	if err != nil {
+		return ccContentPart{}, err
+	}
+	return ccContentPart{Type: part["type"].(string), File: part["file"], InputAudio: part["input_audio"], VideoURL: part["video_url"]}, nil
 }

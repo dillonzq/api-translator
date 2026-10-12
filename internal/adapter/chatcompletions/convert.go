@@ -150,6 +150,15 @@ func chatToClaude(body []byte, tools ...*shared.ResponseTools) ([]byte, *errclas
 // names in upstream CC bodies therefore behave identically to every
 // other route (F5 parity).
 func ccContentToBlocks(raw json.RawMessage) ([]claudeBlock, *errclass.Error) {
+	parts, err := shared.DecodeStringOrParts(raw, EndpointPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, part := range parts {
+		if part.Media != nil {
+			return nil, shared.UnsupportedPartType(part.Media.Kind, "response content")
+		}
+	}
 	return shared.ClaudeBlocksFromOpenAI(raw, EndpointPath)
 }
 
