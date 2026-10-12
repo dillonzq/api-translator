@@ -51,11 +51,12 @@ func HasContent(raw json.RawMessage) bool {
 }
 
 // DecodeProbe decodes best-effort JSON into v and discards the error. Callers
-// use it only for probes whose bytes come from a document that was already
-// parsed: a shape mismatch leaves the fields v already holds, and that path
-// keeps the original bytes rather than rebuilding them from v. Code that turns
-// v into new output must call json.Unmarshal and handle the error; errcheck
-// still reports those call sites, because this helper is the only sanctioned
+// use it only for non-authoritative probes of already parsed JSON. Unmarshal
+// can partially modify v before reporting a shape mismatch; this helper offers
+// no rollback or validation guarantee. Callers must not rely on partially
+// decoded values to rebuild required output. Output-producing decodes must
+// call json.Unmarshal and handle the error; errcheck still reports those call
+// sites, because this helper is the only sanctioned
 // unchecked decode in the package.
 func DecodeProbe(data []byte, v any) {
 	_ = json.Unmarshal(data, v)

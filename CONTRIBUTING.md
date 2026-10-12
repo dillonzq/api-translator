@@ -99,7 +99,7 @@ The weekly run catches new vulnerability database findings even when there are n
 5. **State is per execution.** `RequestState` carries tool identities, options, and diagnostics for one request. No package-level mutable state, no shared caches, no goroutines that outlive a call.
 6. **Callers own the edges.** Transport, retries, capability checks, and user-facing error responses belong to the caller. Report what happened through `*translator.Error` and diagnostics instead of guessing.
 7. **Never emit secrets.** Error messages are logged by callers; wrap your own text with `translator.Redact`. Code under `internal/` cannot use the root package, so it calls `errclass.Redact` instead.
-8. **Decode errors are handled, not discarded.** Output-producing decodes must check the error. A genuine best-effort probe goes through `shared.DecodeProbe`, whose doc comment states the contract: a shape mismatch leaves the target unchanged and the path keeps the original bytes. `shared.StringField` is the same idea for a single string field and reports `ok=false` so callers can stop instead of substituting an empty string.
+8. **Decode errors are handled, not discarded.** Output-producing decodes must check the error. A genuine best-effort probe goes through `shared.DecodeProbe`, whose doc comment states the contract: the target can be partially modified on a shape mismatch, so the helper provides no validation or rollback guarantee. Use it only for non-authoritative inspection, never to rebuild required output from possibly partial values. `shared.StringField` performs a checked read of a single string field and reports `ok=false` so callers can stop instead of substituting an empty string.
 
 ## Changing conversion behavior
 
@@ -133,7 +133,7 @@ Work through this list; reviewers will check it against the diff.
   - `gocritic` keeps its default checks and adds the `diagnostic` tag; `ifElseChain` is disabled explicitly because the converters keep if/else chains for mixed predicates.
   - `staticcheck` keeps correctness (`SA*`) and simplicity (`S1*`) checks and disables style (`ST*`) and quickfix (`QF*`) classes.
 - Suppress a finding inline only with a reason: `//nolint:nilerr // an undecodable body carries no protocol error envelope`. `nolintlint` requires a specific linter, an explanation, and no unused directive, so prefer a comment over widening the configuration.
-- Changing `.golangci.yml` or the pinned versions in CI is a reviewed change: state what it catches and why the exclusions are safe.
+- Actions are pinned to full commit SHAs with version comments; Dependabot proposes reviewed updates. Changing `.golangci.yml` or the pinned versions in CI is a reviewed change: state what it catches and why the exclusions are safe.
 - Write comments for the reason, not the mechanics, and keep exported identifiers documented; reviewers read them.
 - Keep the tone of the existing code: complete sentences, protocol terms in backticks, no invented guarantees.
 
@@ -186,7 +186,7 @@ The release workflow gates the GitHub Release, not the module version: once a ta
    ```
 
 5. [`.github/workflows/release.yml`](.github/workflows/release.yml) first validates the version against the module path and checks that the commit is an ancestor of `origin/main`. Only then does it run the full CI workflow on the tagged commit and create the GitHub Release with generated notes when every check passes. Tags with a suffix such as `v0.3.0-rc.1` are published as pre-releases.
-6. Re-running the release job is safe: an existing release is left untouched, so a failed step can be retried. Never move a published tag; correct the notes with `gh release edit` instead.
+6. Re-running the release job is safe: an existing published release is left untouched, while an existing draft is published only after validation and CI pass. Draft titles, notes, and assets are preserved; prerelease status follows the tag suffix. Never move a published tag; correct the notes with `gh release edit` instead.
 7. Prereleases are for feedback; promote them by tagging the final version once the notes are accurate.
 8. Configure branch protection or a ruleset to require `CI passed` (Settings → Branches or Rules → Rulesets). This stable check fails on failed, cancelled, or skipped validation jobs, including matrix jobs. When adding a validation job, add it to the aggregate job's `needs` list. Retire any old required check names only after the new check has run successfully on a pull request; these repository settings are maintained separately from workflow files.
 

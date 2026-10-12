@@ -111,7 +111,12 @@ func (sc *StreamConverter) messageSnapshot(item functionCallItem) ([][]byte, boo
 		}
 		events = append(events, more...)
 		var annotations []json.RawMessage
-		shared.DecodeProbe(part.Annotations, &annotations)
+		if json.Unmarshal(part.Annotations, &annotations) != nil {
+			if shared.HasContent(part.Annotations) {
+				sc.context.Report("responses", sc.outputFormat, fmt.Sprintf("output.%s/%d/false.annotations", item.ID, i), false)
+			}
+			continue
+		}
 		for _, raw := range annotations {
 			events = append(events, sc.annotation(item.ID, i, raw)...)
 		}

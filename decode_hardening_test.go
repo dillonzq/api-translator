@@ -157,3 +157,115 @@ func TestUnreadableInlineErrorEnvelopeFails(t *testing.T) {
 		t.Fatal("string error envelope was treated as success")
 	}
 }
+
+func TestResponsesSearchMalformedActionFails(t *testing.T) {
+	for _, action := range []string{
+		`{"type":"search","query":123}`,
+		`{"type":"search","query":{}}`,
+		`{"type":"search","query":"Go","sources":[{"url":123}]}`,
+	} {
+		t.Run(action, func(t *testing.T) {
+			body := `{"id":"r","object":"response","status":"completed","output":[{"type":"web_search_call","id":"s1","status":"completed","action":` + action + `}]}`
+			if out, err := translator.ConvertResponse(translator.FormatResponses, translator.FormatMessages, 200, []byte(body), nil); err == nil || err.Class != translator.ClassTranslation {
+				t.Fatalf("malformed action accepted: out=%s err=%v", out, err)
+			}
+			stream := "event: response.created\ndata: {\"response\":{\"id\":\"r\"}}\n\n" +
+				"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":" + body + "}\n\n"
+			assertSearchStreamFails(t, translator.FormatResponses, translator.FormatMessages, stream)
+		})
+	}
+}
+
+func TestMessagesStreamInitialSearchInputFails(t *testing.T) {
+	for _, input := range []string{`{"query":123}`, `{"query":[]}`, `"Go"`} {
+		t.Run(input, func(t *testing.T) {
+			stream := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"r\",\"model\":\"m\"}}\n\n" +
+				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"s1\",\"name\":\"web_search\",\"input\":" + input + "}}\n\n" +
+				"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+			assertSearchStreamFails(t, translator.FormatMessages, translator.FormatResponses, stream)
+		})
+	}
+}
+
+func assertSearchStreamFails(t *testing.T, from, to, stream string) {
+	t.Helper()
+	for _, body := range []string{stream, strings.TrimRight(stream, "\n")} {
+		for _, step := range []int{1, len(body)} {
+			sc, err := translator.NewStreamConverter(from, to, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var frames [][]byte
+			for i := 0; i < len(body); i += step {
+				var events [][]byte
+				var done bool
+				events, done, err = sc.Feed([]byte(body[i:min(i+step, len(body))]))
+				frames = append(frames, events...)
+				if done {
+					t.Fatal("malformed search completed successfully")
+				}
+				if err != nil {
+					break
+				}
+			}
+			if err == nil {
+				var tail [][]byte
+				tail, err = sc.Finish()
+				frames = append(frames, tail...)
+			}
+			if err == nil || err.Class != translator.ClassTranslation {
+				t.Fatalf("malformed search was not rejected: %v", err)
+			}
+			if len(frames) == 0 {
+				t.Fatal("events preceding the malformed search were discarded")
+			}
+			for _, frame := range frames {
+				if strings.Contains(string(frame), `"query":""`) {
+					t.Fatalf("empty query invented before failure: %s", frame)
+				}
+			}
+			if _, err := sc.Finish(); err == nil {
+				t.Fatal("failed stream recovered at EOF")
+			}
+		}
+	}
+}
+
+func TestResponsesStreamMalformedAnnotationsReported(t *testing.T) {
+	item := `{"type":"message","id":"m1","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":{"url":"https://example.com"}}]}`
+	for _, target := range []string{translator.FormatChatCompletions, translator.FormatMessages} {
+		for _, snapshot := range []struct{ name, frame string }{
+			{"item-and-terminal", "event: response.output_item.done\ndata: {\"item\":" + item + "}\n\n"},
+			{"terminal-only", ""},
+		} {
+			t.Run(target+"/"+snapshot.name, func(t *testing.T) {
+				state := translator.NewRequestState()
+				stream := "event: response.created\ndata: {\"response\":{\"id\":\"r\"}}\n\n" + snapshot.frame +
+					"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"object\":\"response\",\"status\":\"completed\",\"output\":[" + item + "]}}\n\n"
+				events := streamFrames(t, translator.FormatResponses, target, stream, state)
+				var textCount int
+				for _, event := range events {
+					if event.Name == "content_block_delta" {
+						if delta, ok := event.Data["delta"].(map[string]any); ok && delta["text"] == "answer" {
+							textCount++
+						}
+					} else if choices, ok := event.Data["choices"].([]any); ok && len(choices) > 0 {
+						if delta, ok := choices[0].(map[string]any)["delta"].(map[string]any); ok && delta["content"] == "answer" {
+							textCount++
+						}
+					}
+				}
+				if textCount != 1 {
+					t.Fatalf("visible text should survive once: %+v", events)
+				}
+				for _, d := range state.Diagnostics() {
+					if d.Path == "output.m1/0/false.annotations" && !d.Semantic && d.From == translator.FormatResponses && d.To == target {
+						return
+					}
+				}
+				t.Fatalf("missing annotations loss diagnostic: %+v", state.Diagnostics())
+			})
+		}
+	}
+}

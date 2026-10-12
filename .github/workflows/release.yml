@@ -21,11 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
@@ -82,11 +82,11 @@ jobs:
     permissions:
       contents: write # create the release
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0 # full history for generated notes
           persist-credentials: false
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
@@ -97,11 +97,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            # Re-running a partially failed release job must not fail: the tag
-            # is already published and its notes exist. Published tags are
-            # never moved; edit the notes through `gh release edit` instead.
-            echo "${GITHUB_REF_NAME} already has a release; nothing to do"
+          if is_draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft)"; then
+            if [[ "${is_draft}" == "true" ]]; then
+              # CI has verified the tag. Preserve prepared notes and assets,
+              # but ensure release visibility and prerelease status match it.
+              prerelease=false
+              if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+                prerelease=true
+              fi
+              gh release edit "${GITHUB_REF_NAME}" --draft=false --verify-tag --prerelease="${prerelease}"
+              echo "${GITHUB_REF_NAME} draft published"
+            else
+              echo "${GITHUB_REF_NAME} already has a published release; nothing to do"
+            fi
             exit 0
           fi
           args=(--verify-tag --generate-notes --title "${GITHUB_REF_NAME}")

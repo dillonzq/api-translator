@@ -15,27 +15,34 @@ type HostedSearch struct {
 	Sources []map[string]string
 }
 
-func SearchFromResponse(item map[string]json.RawMessage) (HostedSearch, bool) {
+func SearchFromResponse(item map[string]json.RawMessage) (HostedSearch, bool, *errclass.Error) {
 	var typ string
 	DecodeProbe(item["type"], &typ)
 	if typ != "web_search_call" {
-		return HostedSearch{}, false
+		return HostedSearch{}, false, nil
 	}
 	var s HostedSearch
-	DecodeProbe(item["id"], &s.ID)
-	DecodeProbe(item["status"], &s.Status)
+	var ok bool
+	if s.ID, ok = StringField(item["id"]); !ok {
+		return HostedSearch{}, false, errclass.Translation("invalid web search identity")
+	}
+	if s.Status, ok = StringField(item["status"]); !ok {
+		return HostedSearch{}, false, errclass.Translation("invalid web search status")
+	}
 	var action struct {
 		Type    string              `json:"type"`
 		Query   string              `json:"query"`
 		Sources []map[string]string `json:"sources"`
 	}
-	DecodeProbe(item["action"], &action)
+	if HasContent(item["action"]) && json.Unmarshal(item["action"], &action) != nil {
+		return HostedSearch{}, false, errclass.Translation("invalid web search action")
+	}
 	if action.Type != "" && action.Type != "search" {
-		return HostedSearch{}, false
+		return HostedSearch{}, false, nil
 	}
 	s.Query = action.Query
 	s.Sources = action.Sources
-	return s, true
+	return s, true, nil
 }
 func (s HostedSearch) ResponseItem() map[string]any {
 	status := s.Status
