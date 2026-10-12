@@ -41,6 +41,22 @@ Responses `additional_tools` merges into declarations. Namespaces flatten into f
 
 Custom tools, including `apply_patch`, can become functions using string `input`; the default schema requires `input`. Responses output restores custom calls across items, input delta/done, and terminal snapshots. Unrepresentable constraints such as custom grammars produce diagnostics.
 
+### Local shell adaptation
+
+This adapts a Responses client's local shell for Chat Completions or Messages upstreams, or for a Responses upstream through explicit `NormalizeResponsesRequest`. Return responses to the Responses client using the same `RequestState`.
+
+A local `shell` declaration (environment omitted or `type: "local"`, including `{"type":"local","skills":[]}`) becomes a function named `shell`. Its arguments contain a required nonempty `commands` array and optional nullable `timeout_ms` and `max_output_length` limits. Omitted or empty-array local `skills` are supported; null and other non-array values are rejected, and nonempty skills or other unrepresentable local settings fail explicitly. Shell actions reject properties outside `commands`, `timeout_ms`, and `max_output_length`. Local shell tools cannot be namespaced or declared alongside an ordinary function/custom tool named `shell`. Unqualified historical `custom_tool_call` items named `shell` also conflict and are rejected before shell identity registration; namespaced custom calls with the same leaf name remain distinct.
+
+Historical `shell_call` items become function calls. `shell_call_output` becomes JSON text preserving output order, stdout, stderr, exit codes, and timeout outcomes. If `max_output_length` is present, the text contains an object with `output` and `max_output_length`; otherwise it contains the output array. Cross-protocol Responses request identities are committed only after the entire conversion succeeds; failure diagnostics remain available.
+
+Restored calls include a stable item `id`, a separate `call_id`, `environment: {"type":"local"}`, and a status. Native streams retain the first item ID for each `call_id`, including later snapshots that omit `id`; native statuses are preserved. Missing or blank call IDs are rejected before restoration; missing status becomes `in_progress` on an added event and `completed` on a completed item. Missing action limits are emitted as `null`.
+
+Streaming announces the shell item before completion, then emits the complete action in `response.output_item.done` and the terminal snapshot with the same item ID. Shell function argument delta/done events are suppressed. Protocol-level upstream failures are classified before argument validation, preserving their error category and retryability; invalid or incomplete arguments in successful responses fail.
+
+The library does not execute commands. Hosted shell environments remain native on Responses paths and are unsupported across protocols; legacy `local_shell` tools are outside this mapping. Actual native `shell_call` output is not mapped to Chat Completions or Messages clients. Exact JSON numbers are preserved by explicit normalization and native Responses restoration; existing cross-protocol paths that decode arguments into floating-point values, including Messages request history, may round large integers.
+
+### Hosted search
+
 | Search path | Supported scope |
 | --- | --- |
 | Responses ↔ Messages | Representable web search declarations, queries, location, allowed domains, URL sources, and completion information |
@@ -70,7 +86,7 @@ Responses streams accept `response.reasoning_summary_text.delta/done` and `respo
 
 Cross-protocol conversion omits Anthropic `signature`, `signature_delta`, `redacted_thinking.data`, and Responses `encrypted_content`. These are provider-specific signatures or opaque data with no reliable cross-protocol mapping. Signatures are not fabricated, and opaque data is not interpreted as readable reasoning. Unsigned thinking is suitable for display but is not guaranteed to be replayable to Anthropic endpoints requiring valid signatures.
 
-Same-protocol responses generally pass through unchanged and preserve these fields. Responses custom tool restoration and streaming error/termination handling are exceptions.
+Same-protocol responses generally pass through unchanged and preserve these fields. Responses tool identity restoration and streaming error/termination handling are exceptions.
 
 ## Reasoning controls and suffixes
 
@@ -184,4 +200,4 @@ Logprobs, provider extensions, historical compaction, and signatures are not gua
 
 The root package owns public dispatch, request policy, and transport boundaries. Each protocol adapter's `request.go`, `convert.go`, and `stream.go` own conversion. Shared tool normalization, schema, citations, search, and diagnostics live in `internal/adapter/shared`; reasoning controls and suffixes live in `thinking`.
 
-Tests cover 27 request/response/stream snapshots, interleaved tools, late identity, citation fragments, search failure, and termination consistency. Fuzz tests check network chunking invariance and irreversible errors; they do not replace real-upstream compatibility validation. Commands are in the README.
+Tests cover 27 request/response/stream snapshots, interleaved tools, late identity, citation fragments, search failure, termination consistency, and local shell restoration/error paths. Fuzz tests check network chunking invariance and irreversible errors; they do not replace real-upstream compatibility validation. Commands are in the README.

@@ -30,6 +30,9 @@ func NormalizeResponsesRequest(body []byte, state *ResponseTools) ([]byte, *errc
 	for name, id := range state.names {
 		work.names[name] = id
 	}
+	if _, err := normalizeShellDocument(doc, work); err != nil {
+		return nil, err
+	}
 	register := func(name string, id responseToolIdentity) *errclass.Error {
 		if strings.TrimSpace(id.name) == "" {
 			return errclass.Translation("Responses tool requires a name")
@@ -105,7 +108,11 @@ func NormalizeResponsesRequest(body []byte, state *ResponseTools) ([]byte, *errc
 		if namespace != "" {
 			wire = qualifiedToolName(name, namespace)
 		}
-		if err := register(wire, responseToolIdentity{name: name, namespace: namespace, isCustom: typ == "custom"}); err != nil {
+		identity := responseToolIdentity{name: name, namespace: namespace, isCustom: typ == "custom"}
+		if work.IsShell(wire) && typ == "function" && namespace == "" {
+			identity = work.Identity(wire)
+		}
+		if err := register(wire, identity); err != nil {
 			return err
 		}
 		// Match legacy normalization: the first declaration of an identical
@@ -144,6 +151,9 @@ func NormalizeResponsesRequest(body []byte, state *ResponseTools) ([]byte, *errc
 			wire = qualifiedToolName(name, ns)
 		}
 		id := responseToolIdentity{name: name, namespace: ns, isCustom: typ == "custom" || typ == "custom_tool_call"}
+		if work.IsShell(wire) && ns == "" && !id.isCustom {
+			id = work.Identity(wire)
+		}
 		if prev, ok := work.names[wire]; ok {
 			if prev.name != name || prev.namespace != ns || (id.isCustom && !prev.isCustom) {
 				return errclass.Translation("Responses tool reference conflicts with a flattened tool name")

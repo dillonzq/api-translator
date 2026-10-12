@@ -4,7 +4,8 @@ import "encoding/json"
 
 // RestoreToolItem preserves unmodeled fields and numeric JSON values while
 // restoring a flattened function's namespace, original name, and custom input.
-func RestoreToolItem(raw json.RawMessage, tools *ResponseTools) (json.RawMessage, bool) {
+// An optional stream registry retains the first shell item ID per call_id.
+func RestoreToolItem(raw json.RawMessage, tools *ResponseTools, shellItemIDs ...map[string]string) (json.RawMessage, bool) {
 	var item map[string]json.RawMessage
 	if json.Unmarshal(raw, &item) != nil {
 		return raw, false
@@ -16,6 +17,46 @@ func RestoreToolItem(raw json.RawMessage, tools *ResponseTools) (json.RawMessage
 		return raw, false
 	}
 	id := tools.Identity(name)
+	if id.isShell && typ == "function_call" {
+		callID := rawString(item, "call_id")
+		if ValidateShellCallID(callID) != nil {
+			return raw, false
+		}
+		itemID := rawString(item, "id")
+		// A stream may omit id on later snapshots. Retain its first identity.
+		if len(shellItemIDs) > 0 && shellItemIDs[0][callID] != "" {
+			itemID = shellItemIDs[0][callID]
+		}
+		if itemID == "" {
+			itemID = ShellItemID(callID)
+		}
+		putString(item, "id", itemID)
+		var args string
+		json.Unmarshal(item["arguments"], &args)
+		// Added events announce an empty action before arguments arrive.
+		action := json.RawMessage(`{"commands":[]}`)
+		if args != "" {
+			validated, actionErr := ShellAction(args)
+			if actionErr != nil {
+				return raw, false
+			}
+			action = validated
+		}
+		item["type"] = json.RawMessage(`"shell_call"`)
+		item["action"] = shellResponseAction(action)
+		item["environment"] = json.RawMessage(shellEnvironment)
+		if rawString(item, "status") == "" {
+			putString(item, "status", "completed")
+		}
+		delete(item, "name")
+		delete(item, "arguments")
+		delete(item, "namespace")
+		if len(shellItemIDs) > 0 && shellItemIDs[0] != nil {
+			shellItemIDs[0][callID] = itemID
+		}
+		out, _ := json.Marshal(item)
+		return out, true
+	}
 	changed := id.name != name || id.namespace != "" || id.isCustom
 	if !changed {
 		return raw, false
@@ -37,7 +78,7 @@ func RestoreToolItem(raw json.RawMessage, tools *ResponseTools) (json.RawMessage
 	}
 	return out, true
 }
-func RestoreResponseTools(body []byte, tools *ResponseTools) []byte {
+func RestoreResponseTools(body []byte, tools *ResponseTools, shellItemIDs ...map[string]string) []byte {
 	var doc map[string]json.RawMessage
 	if json.Unmarshal(body, &doc) != nil {
 		return body
@@ -48,7 +89,7 @@ func RestoreResponseTools(body []byte, tools *ResponseTools) []byte {
 	}
 	changed := false
 	for i, item := range items {
-		restored, ok := RestoreToolItem(item, tools)
+		restored, ok := RestoreToolItem(item, tools, shellItemIDs...)
 		if ok {
 			items[i] = restored
 			changed = true

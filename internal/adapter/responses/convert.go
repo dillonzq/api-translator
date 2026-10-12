@@ -105,6 +105,9 @@ func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []by
 		if !json.Valid(upstreamBody) {
 			return nil, errclass.Translation("malformed Responses response JSON")
 		}
+		if err := shared.ValidateShellResponse(upstreamBody, "responses", shared.ResponseToolContext(tools)); err != nil {
+			return nil, err
+		}
 		return restoreCustomPassthrough(upstreamBody, shared.ResponseToolContext(tools)), nil
 	case "chat-completions":
 		return responsesToChat(upstreamBody, tools...)

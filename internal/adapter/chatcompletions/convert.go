@@ -64,6 +64,9 @@ func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []by
 	case "messages":
 		return chatToClaude(upstreamBody, tools...)
 	case "responses":
+		if err := shared.ValidateShellResponse(upstreamBody, "chat-completions", shared.ResponseToolContext(tools)); err != nil {
+			return nil, err
+		}
 		return chatToResponses(upstreamBody, tools...)
 	default:
 		return nil, shared.UnsupportedFormat(sourceFormat, EndpointPath)

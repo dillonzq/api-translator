@@ -132,7 +132,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 				}
 				return
 			}
-			if typ != "function" && typ != "custom" && !(to == FormatMessages && (typ == "web_search" || typ == "web_search_preview")) {
+			if typ != "function" && typ != "custom" && !localShell(tool) && !(to == FormatMessages && (typ == "web_search" || typ == "web_search_preview")) {
 				add(path, true)
 			}
 			if typ == "custom" && len(tool["format"]) > 0 {
@@ -154,6 +154,9 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 			}
 		}
 		known := map[string]bool{"type": true, "name": true, "description": true, "parameters": true, "input_schema": true, "strict": true, "cache_control": true, "format": true}
+		if from == FormatResponses && localShell(tool) {
+			known["environment"] = true
+		}
 		if (from == FormatResponses && (typ == "web_search" || typ == "web_search_preview")) || (from == FormatMessages && strings.HasPrefix(typ, "web_search_")) {
 			for _, key := range []string{"user_location", "filters", "allowed_domains", "blocked_domains", "max_uses", "search_context_size"} {
 				known[key] = true

@@ -17,6 +17,7 @@ type responseToolIdentity struct {
 	name      string
 	namespace string
 	isCustom  bool
+	isShell   bool
 }
 
 // ResponseTools tracks flattened namespace wire names to their original
@@ -30,6 +31,19 @@ type ResponseTools struct {
 // NewResponseTools prepares an empty namespace registry.
 func NewResponseTools() *ResponseTools {
 	return &ResponseTools{names: make(map[string]responseToolIdentity)}
+}
+
+// Clone isolates identities while a request conversion is still fallible.
+func (t *ResponseTools) Clone() *ResponseTools {
+	copy := NewResponseTools()
+	if t != nil {
+		copy.Options = t.Options
+		copy.diagnostics = t.Diagnostics()
+		for name, identity := range t.names {
+			copy.names[name] = identity
+		}
+	}
+	return copy
 }
 
 // ResponseToolContext resolves the registry for a request conversion:
@@ -66,6 +80,9 @@ func (t *ResponseTools) IsCustom(name string) bool {
 	}
 	return false
 }
+
+// IsShell identifies the function used to emulate a local Responses shell.
+func (t *ResponseTools) IsShell(name string) bool { return t.Identity(name).isShell }
 
 // UnwrapCustomToolInput extracts the input string from custom tool call
 // arguments: a JSON object with properties like "input", "code", or "arguments"
@@ -158,6 +175,9 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 				continue
 			}
 			id := responseToolIdentity{name: tool.Name, isCustom: wasCustom}
+			if t.IsShell(tool.Name) && tool.Type == "function" {
+				id = t.Identity(tool.Name)
+			}
 			if prev, ok := t.names[tool.Name]; ok {
 				if prev != id {
 					return nil, errclass.Translation("Responses tool names collide after namespace conversion")

@@ -70,6 +70,9 @@ func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []by
 	case "chat-completions":
 		return claudeToChat(upstreamBody, tools...)
 	case "responses":
+		if err := shared.ValidateShellResponse(upstreamBody, "messages", shared.ResponseToolContext(tools)); err != nil {
+			return nil, err
+		}
 		return claudeToResponses(upstreamBody, tools...)
 	default:
 		return nil, shared.UnsupportedFormat(sourceFormat, EndpointPath)
@@ -227,6 +230,9 @@ func claudeToResponses(body []byte, tools ...*shared.ResponseTools) ([]byte, *er
 			}
 		case "tool_use":
 			args, _ := json.Marshal(decodeBlockInput(blk.Input))
+			if ctx.IsShell(blk.Name) {
+				args = blk.Input
+			}
 			oa.AppendFunctionCall(blk.ID, blk.Name, string(args))
 		case "thinking":
 			oa.AppendReasoning(fmt.Sprintf("%s_reasoning_%d", resp.ID, idx), blk.Thinking)
