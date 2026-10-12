@@ -199,6 +199,6 @@ Logprobs, provider extensions, historical compaction, and signatures are not gua
 
 ## Implementation and validation
 
-The root package owns public dispatch, request policy, and transport boundaries. Each protocol adapter's `request.go`, `convert.go`, and `stream.go` own conversion. Shared tool normalization, schema, citations, search, and diagnostics live in `internal/adapter/shared`; reasoning controls and suffixes live in `thinking`.
+The root package owns public dispatch, request policy, and transport boundaries. Protocol adapters own direct conversion, upstream event dispatch, and target stream output. Shared protocol types, event construction, tool identities, and field rules are organized by responsibility in `internal/adapter/shared`; reasoning controls and suffixes live in `thinking`. See [code structure and maintenance](architecture.md) for module and state contracts.
 
 Tests cover 27 request/response/stream snapshots, interleaved tools, late identity, citation fragments, search failure, termination consistency, and local shell restoration/error paths. Fuzz tests check network chunking invariance and irreversible errors; they do not replace real-upstream compatibility validation. Commands are in the README.

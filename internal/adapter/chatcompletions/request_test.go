@@ -543,7 +543,7 @@ func TestFromResponses_NamespaceChildUnrolls(t *testing.T) {
 			]}
 		]
 	}`
-	out, eErr := BuildRequest("m", "responses", []byte(body), shared.NewResponseTools())
+	out, eErr := BuildRequest("m", "responses", []byte(body), shared.NewConversionContext())
 	m := decodeOut(t, out, eErr)
 	tools, ok := m["tools"].([]any)
 	if !ok || len(tools) != 1 {
@@ -565,7 +565,7 @@ func TestFromResponses_NamespacedToolChoiceFlattened(t *testing.T) {
 		],
 		"tool_choice": {"type": "function", "name": "spawn_agent", "namespace": "subagents"}
 	}`
-	out, eErr := BuildRequest("m", "responses", []byte(body), shared.NewResponseTools())
+	out, eErr := BuildRequest("m", "responses", []byte(body), shared.NewConversionContext())
 	m := decodeOut(t, out, eErr)
 	tc, ok := m["tool_choice"].(map[string]any)
 	if !ok || tc["type"] != "function" {

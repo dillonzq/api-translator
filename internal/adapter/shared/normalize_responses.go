@@ -20,28 +20,19 @@ func putString(obj rawObject, key, value string) { obj[key], _ = json.Marshal(va
 
 // NormalizeResponsesRequest preserves extension fields and exact JSON numbers.
 // Identity changes are committed only after the entire request succeeds.
-func NormalizeResponsesRequest(body []byte, state *ResponseTools) ([]byte, *errclass.Error) {
+func NormalizeResponsesRequest(body []byte, state *ConversionContext) ([]byte, *errclass.Error) {
+	return state.WithToolTransaction(func(work *ConversionContext) ([]byte, *errclass.Error) {
+		return normalizeResponsesRequest(body, work)
+	})
+}
+
+func normalizeResponsesRequest(body []byte, work *ConversionContext) ([]byte, *errclass.Error) {
 	var doc rawObject
 	if json.Unmarshal(body, &doc) != nil || doc == nil {
 		return nil, errclass.Translation("Responses normalization requires a JSON object")
 	}
-	work := NewResponseTools()
-	work.Options = state.Options
-	for name, id := range state.names {
-		work.names[name] = id
-	}
 	if _, err := normalizeShellDocument(doc, work); err != nil {
 		return nil, err
-	}
-	register := func(name string, id responseToolIdentity) *errclass.Error {
-		if strings.TrimSpace(id.name) == "" {
-			return errclass.Translation("Responses tool requires a name")
-		}
-		if prev, ok := work.names[name]; ok && prev != id {
-			return errclass.Translation("Responses tool names collide after namespace conversion")
-		}
-		work.names[name] = id
-		return nil
 	}
 	var tools []rawObject
 	if HasContent(doc["tools"]) && json.Unmarshal(doc["tools"], &tools) != nil {
@@ -104,33 +95,23 @@ func NormalizeResponsesRequest(body []byte, state *ResponseTools) ([]byte, *errc
 			flat = append(flat, tool) // hosted tools stay under caller control
 			return nil
 		}
-		wire := name
-		if namespace != "" {
-			wire = qualifiedToolName(name, namespace)
-		}
-		identity := responseToolIdentity{name: name, namespace: namespace, isCustom: typ == "custom"}
-		if work.IsShell(wire) && typ == "function" && namespace == "" {
-			identity = work.Identity(wire)
-		}
-		if err := register(wire, identity); err != nil {
+		wire, first, err := work.Tools.declareTool(declared, responseToolIdentity{name: name, namespace: namespace, isCustom: typ == "custom"})
+		if err != nil {
 			return err
 		}
-		// Match legacy normalization: the first declaration of an identical
-		// identity wins, including tools merged from additional_tools.
-		if declared[wire] {
+		if !first {
 			return nil
 		}
-		declared[wire] = true
 		putString(tool, "name", wire)
 		if typ == "custom" {
 			if HasContent(tool["format"]) {
-				if err := state.RejectLoss(DiagnosticFor(FormatResponses, FormatResponses, path+".format", true)); err != nil {
+				if err := work.RejectLoss(DiagnosticFor(FormatResponses, FormatResponses, path+".format", true)); err != nil {
 					return err
 				}
 			}
 			delete(tool, "format")
 			putString(tool, "type", "function")
-			tool["parameters"] = json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}`)
+			tool["parameters"] = json.RawMessage(customToolParameters)
 		}
 		flat = append(flat, tool)
 		return nil
@@ -146,21 +127,8 @@ func NormalizeResponsesRequest(body []byte, state *ResponseTools) ([]byte, *errc
 			return nil
 		}
 		name, ns := rawString(item, "name"), rawString(item, "namespace")
-		wire := name
-		if ns != "" {
-			wire = qualifiedToolName(name, ns)
-		}
-		id := responseToolIdentity{name: name, namespace: ns, isCustom: typ == "custom" || typ == "custom_tool_call"}
-		if work.IsShell(wire) && ns == "" && !id.isCustom {
-			id = work.Identity(wire)
-		}
-		if prev, ok := work.names[wire]; ok {
-			if prev.name != name || prev.namespace != ns || (id.isCustom && !prev.isCustom) {
-				return errclass.Translation("Responses tool reference conflicts with a flattened tool name")
-			}
-			id = prev
-		}
-		if err := register(wire, id); err != nil {
+		wire, err := work.Tools.referenceTool(responseToolIdentity{name: name, namespace: ns, isCustom: typ == "custom" || typ == "custom_tool_call"})
+		if err != nil {
 			return err
 		}
 		putString(item, "name", wire)
@@ -170,9 +138,8 @@ func NormalizeResponsesRequest(body []byte, state *ResponseTools) ([]byte, *errc
 			if json.Unmarshal(item["input"], &input) != nil {
 				return errclass.Translation("custom_tool_call input must be a string")
 			}
-			args, _ := json.Marshal(map[string]string{"input": input})
 			putString(item, "type", "function_call")
-			putString(item, "arguments", string(args))
+			putString(item, "arguments", wrapCustomInput(input))
 			delete(item, "input")
 		} else if typ == "custom" {
 			putString(item, "type", "function")
@@ -228,6 +195,5 @@ func NormalizeResponsesRequest(body []byte, state *ResponseTools) ([]byte, *errc
 	if err != nil {
 		return nil, errclass.Translation("cannot encode normalized Responses request")
 	}
-	state.names = work.names
 	return out, nil
 }

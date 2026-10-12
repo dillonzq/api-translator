@@ -13,10 +13,10 @@ func ConvertResponse(upstreamFormat, outputFormat string, status int, body []byt
 	}
 	switch upstreamFormat {
 	case FormatChatCompletions:
-		return chatcompletions.ConvertNonStreamResponse(outputFormat, status, body, toolState(state))
+		return chatcompletions.ConvertNonStreamResponse(outputFormat, status, body, conversionContext(state))
 	case FormatMessages:
-		return messages.ConvertNonStreamResponse(outputFormat, status, body, toolState(state))
+		return messages.ConvertNonStreamResponse(outputFormat, status, body, conversionContext(state))
 	default:
-		return responses.ConvertNonStreamResponse(outputFormat, status, body, toolState(state))
+		return responses.ConvertNonStreamResponse(outputFormat, status, body, conversionContext(state))
 	}
 }

@@ -85,43 +85,43 @@ type respResultIn struct {
 }
 
 // ConvertNonStreamResponse translates an upstream /v1/responses HTTP
-// result back into the client protocol sourceFormat (FR-006, AC §D).
+// result back into the client protocol outputFormat (FR-006, AC §D).
 // Statuses >= 400 become classified redacted errors (§7); "responses"
 // passes through; "chat-completions" and "messages" are converted, preserving text,
 // function calls, terminal status, and usage. Unknown formats are
 // ClassUnsupported; malformed upstream bodies are ClassTranslation.
-func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func ConvertNonStreamResponse(outputFormat string, status int, upstreamBody []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	if status >= 400 {
 		return nil, shared.UpstreamStatusError(status, upstreamBody)
 	}
 	if err := shared.CheckProtocolFailure(upstreamBody, "responses"); err != nil {
 		return nil, err
 	}
-	if sourceFormat != "responses" {
-		shared.ResponseToolContext(tools).RecordResponseLosses("responses", sourceFormat, upstreamBody)
+	if outputFormat != "responses" {
+		shared.ContextOrNew(tools).RecordResponseLosses("responses", outputFormat, upstreamBody)
 	}
-	switch sourceFormat {
+	switch outputFormat {
 	case "responses":
 		if !json.Valid(upstreamBody) {
 			return nil, errclass.Translation("malformed Responses response JSON")
 		}
-		if err := shared.ValidateShellResponse(upstreamBody, "responses", shared.ResponseToolContext(tools)); err != nil {
+		if err := shared.ValidateShellResponse(upstreamBody, "responses", shared.ContextOrNew(tools)); err != nil {
 			return nil, err
 		}
-		return restoreCustomPassthrough(upstreamBody, shared.ResponseToolContext(tools)), nil
+		return restoreCustomPassthrough(upstreamBody, shared.ContextOrNew(tools)), nil
 	case "chat-completions":
 		return responsesToChat(upstreamBody, tools...)
 	case "messages":
 		return responsesToClaude(upstreamBody, tools...)
 	default:
-		return nil, shared.UnsupportedFormat(sourceFormat, EndpointPath)
+		return nil, shared.UnsupportedFormat(outputFormat, EndpointPath)
 	}
 }
 
 // restoreCustomPassthrough rewrites function_call output items for custom
 // tools into their custom_tool_call shape on the native passthrough path;
 // bodies without output arrays or custom tools pass through untouched.
-func restoreCustomPassthrough(body []byte, rt *shared.ResponseTools) []byte {
+func restoreCustomPassthrough(body []byte, rt *shared.ConversionContext) []byte {
 	return shared.RestoreResponseTools(body, rt)
 }
 
@@ -176,7 +176,7 @@ func respItemCarriesPayload(item respOutputItem) bool {
 // verbatim, status maps to finish_reason, and input/output tokens map to
 // prompt/completion usage (FR-006, AC §D). Visible reasoning maps to
 // reasoning_content. Unsupported items carrying payload fail descriptively.
-func responsesToChat(body []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func responsesToChat(body []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	resp, eErr := decodeResp(body)
 	if eErr != nil {
 		return nil, eErr
@@ -184,7 +184,7 @@ func responsesToChat(body []byte, tools ...*shared.ResponseTools) ([]byte, *errc
 	msg := shared.CCResponseMessage{CCMessage: shared.CCMessage{Role: "assistant"}}
 	var text strings.Builder
 	sawToolCall := false
-	ctx := shared.ResponseToolContext(tools)
+	ctx := shared.ContextOrNew(tools)
 	offset := 0
 	for _, item := range resp.Output {
 		switch item.Type {
@@ -267,7 +267,7 @@ func responsesToChat(body []byte, tools ...*shared.ResponseTools) ([]byte, *errc
 // and input/output tokens map to input/output usage (FR-006). Visible
 // reasoning maps to thinking blocks without fabricated signatures.
 // Unsupported items carrying payload fail descriptively.
-func responsesToClaude(body []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func responsesToClaude(body []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	resp, eErr := decodeResp(body)
 	if eErr != nil {
 		return nil, eErr
@@ -275,7 +275,7 @@ func responsesToClaude(body []byte, tools ...*shared.ResponseTools) ([]byte, *er
 	sawToolCall := false
 	refused := false
 	blocks := make([]map[string]any, 0, len(resp.Output))
-	ctx := shared.ResponseToolContext(tools)
+	ctx := shared.ContextOrNew(tools)
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "message":

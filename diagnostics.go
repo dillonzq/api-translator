@@ -24,5 +24,5 @@ func (s *RequestState) Diagnostics() []Diagnostic {
 	if s == nil {
 		return nil
 	}
-	return s.tools.Diagnostics()
+	return s.context.Diagnostics()
 }

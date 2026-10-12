@@ -5,7 +5,7 @@ import "encoding/json"
 // RestoreToolItem preserves unmodeled fields and numeric JSON values while
 // restoring a flattened function's namespace, original name, and custom input.
 // An optional stream registry retains the first shell item ID per call_id.
-func RestoreToolItem(raw json.RawMessage, tools *ResponseTools, shellItemIDs ...map[string]string) (json.RawMessage, bool) {
+func RestoreToolItem(raw json.RawMessage, tools *ConversionContext, shellItemIDs ...map[string]string) (json.RawMessage, bool) {
 	var item map[string]json.RawMessage
 	if json.Unmarshal(raw, &item) != nil {
 		return raw, false
@@ -78,7 +78,7 @@ func RestoreToolItem(raw json.RawMessage, tools *ResponseTools, shellItemIDs ...
 	}
 	return out, true
 }
-func RestoreResponseTools(body []byte, tools *ResponseTools, shellItemIDs ...map[string]string) []byte {
+func RestoreResponseTools(body []byte, tools *ConversionContext, shellItemIDs ...map[string]string) []byte {
 	var doc map[string]json.RawMessage
 	if json.Unmarshal(body, &doc) != nil {
 		return body
@@ -108,7 +108,7 @@ func RestoreResponseTools(body []byte, tools *ResponseTools, shellItemIDs ...map
 
 // RestoreToolEventIdentity rewrites optional event names without changing the
 // event's argument delta, sequence number, or other unmodeled fields.
-func RestoreToolEventIdentity(payload []byte, tools *ResponseTools) (map[string]json.RawMessage, bool) {
+func RestoreToolEventIdentity(payload []byte, tools *ConversionContext) (map[string]json.RawMessage, bool) {
 	var doc map[string]json.RawMessage
 	if json.Unmarshal(payload, &doc) != nil {
 		return nil, false

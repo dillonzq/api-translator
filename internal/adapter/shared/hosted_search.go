@@ -3,8 +3,9 @@ package shared
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/dillonzq/api-translator/internal/errclass"
 	"strings"
+
+	"github.com/dillonzq/api-translator/internal/errclass"
 )
 
 type HostedSearch struct {
@@ -62,7 +63,7 @@ func (s HostedSearch) MessageBlocks() []map[string]any {
 	}
 	return []map[string]any{{"type": "server_tool_use", "id": s.ID, "name": "web_search", "input": map[string]string{"query": s.Query}}, {"type": "web_search_tool_result", "tool_use_id": s.ID, "content": content}}
 }
-func ReadSearchResults(s *HostedSearch, raw json.RawMessage, from, to, path string, state *ResponseTools) {
+func ReadSearchResults(s *HostedSearch, raw json.RawMessage, from, to, path string, state *ConversionContext) {
 	var list []map[string]json.RawMessage
 	if json.Unmarshal(raw, &list) != nil {
 		var errorResult map[string]json.RawMessage
@@ -145,7 +146,7 @@ func (e ResponsesEventEmitter) SearchDone(index int, search HostedSearch) [][]by
 
 // FinalizeSearch applies the same missing-result rule to ordinary and streamed
 // Messages responses. A query alone is never evidence of search success.
-func FinalizeSearch(search *HostedSearch, ctx *ResponseTools) {
+func FinalizeSearch(search *HostedSearch, ctx *ConversionContext) {
 	if search.Status == "completed" || search.Status == "failed" {
 		return
 	}

@@ -3,9 +3,10 @@ package shared
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/dillonzq/api-translator/internal/errclass"
 	"sort"
 	"strings"
+
+	"github.com/dillonzq/api-translator/internal/errclass"
 )
 
 const (
@@ -39,27 +40,10 @@ type Diagnostic struct {
 // are never retried or rejected solely because of this option.
 type ConversionOptions struct{ LossPolicy LossPolicy }
 
-func (s *ResponseTools) Diagnostics() []Diagnostic {
-	if s == nil {
-		return nil
-	}
-	return append([]Diagnostic(nil), s.diagnostics...)
-}
-func (s *ResponseTools) Record(d Diagnostic) {
-	if s == nil {
-		return
-	}
-	for _, prev := range s.diagnostics {
-		if prev == d {
-			return
-		}
-	}
-	s.diagnostics = append(s.diagnostics, d)
-}
-func (s *ResponseTools) Report(from, to, path string, semantic bool) {
+func (s *ConversionContext) Report(from, to, path string, semantic bool) {
 	s.Record(DiagnosticFor(from, to, path, semantic))
 }
-func (s *ResponseTools) RejectLoss(d Diagnostic) *errclass.Error {
+func (s *ConversionContext) RejectLoss(d Diagnostic) *errclass.Error {
 	s.Record(d)
 	if s != nil && (s.Options.LossPolicy == LossPolicyStrict || (s.Options.LossPolicy == LossPolicySafe && d.Semantic)) {
 		return &errclass.Error{Class: errclass.ClassUnsupported, Message: d.Message}
@@ -325,7 +309,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
 }
-func (state *ResponseTools) CheckRequestLosses(from, to string, body []byte) *errclass.Error {
+func (state *ConversionContext) CheckRequestLosses(from, to string, body []byte) *errclass.Error {
 	if state != nil {
 		switch state.Options.LossPolicy {
 		case "", LossPolicyAllow, LossPolicySafe, LossPolicyStrict:
@@ -345,7 +329,7 @@ func (state *ResponseTools) CheckRequestLosses(from, to string, body []byte) *er
 	return nil
 }
 
-func (state *ResponseTools) RecordResponseLosses(from, to string, body []byte) {
+func (state *ConversionContext) RecordResponseLosses(from, to string, body []byte) {
 	var doc map[string]json.RawMessage
 	json.Unmarshal(body, &doc)
 	for _, key := range []string{"metadata", "service_tier", "system_fingerprint", "incomplete_details"} {

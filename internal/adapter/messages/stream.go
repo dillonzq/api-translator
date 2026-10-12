@@ -3,10 +3,8 @@ package messages
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/dillonzq/api-translator/internal/adapter/shared"
 	"github.com/dillonzq/api-translator/internal/errclass"
@@ -18,11 +16,12 @@ import (
 // one instance per upstream response, Feed called with consecutive
 // network chunks in order.
 type StreamConverter struct {
+	chat             chatOutput
+	responses        responsesOutput
 	framer           *shared.SSEFramer
-	sourceFormat     string
+	outputFormat     string
 	created          int64
 	blocks           map[int]*blockState
-	toolOrdinal      int
 	msgID            string
 	model            string
 	promptTokens     int64
@@ -31,15 +30,12 @@ type StreamConverter struct {
 	cacheCreation    *int64
 	stopReason       string // last observed message_delta stop_reason (responses terminal status)
 	toolsSeen        bool   // any tool_use block observed (openai finish-reason precedence)
-	roleSent         bool
-	msgIdx           int  // responses: compacted output_index of the ONE announced message item (-1 until then)
-	outCount         int  // responses: next compacted output position; includes visible thinking items
-	emitted          bool // any client event emitted (Flush eligibility)
+	emitted          bool   // any client event emitted (Flush eligibility)
 	done             bool
 	ending           bool
 	terminalSent     bool
 	flushed          bool // one-shot guard for Flush
-	respTools        *shared.ResponseTools
+	context          *shared.ConversionContext
 	textRunes        int
 	citationKeys     map[string]bool
 	citations        []shared.Citation
@@ -63,18 +59,18 @@ type blockState struct {
 	searchDone    bool
 }
 
-// NewStreamConverter prepares stream conversion for sourceFormat
+// NewStreamConverter prepares stream conversion for outputFormat
 // ("chat-completions" Chat Completions chunks, "responses" Responses events,
 // "messages" verbatim passthrough).
-func NewStreamConverter(sourceFormat string, tools ...*shared.ResponseTools) *StreamConverter {
+func NewStreamConverter(outputFormat string, tools ...*shared.ConversionContext) *StreamConverter {
 	sc := &StreamConverter{
-		framer:       shared.NewSSEFramer(sourceFormat == "messages"),
-		sourceFormat: sourceFormat,
+		framer:       shared.NewSSEFramer(outputFormat == "messages"),
+		outputFormat: outputFormat,
 		created:      time.Now().Unix(),
 		blocks:       map[int]*blockState{},
-		msgIdx:       -1,
 	}
-	sc.respTools = shared.ResponseToolContext(tools)
+	sc.responses.msgIdx = -1
+	sc.context = shared.ContextOrNew(tools)
 	sc.search = map[string]*blockState{}
 	sc.citationKeys = map[string]bool{}
 	return sc
@@ -126,7 +122,7 @@ func (sc *StreamConverter) dispatch(etype, data string, rawBlock []byte, events 
 			return false, errclass.Translation("Messages message_stop payload must have type message_stop")
 		}
 	}
-	if sc.sourceFormat == "messages" {
+	if sc.outputFormat == "messages" {
 		return sc.dispatchClaude(etype, data, rawBlock, events)
 	}
 	var ev sseEvent
@@ -141,13 +137,13 @@ func (sc *StreamConverter) dispatch(etype, data string, rawBlock []byte, events 
 	if etype == "message_delta" && ev.Delta.StopReason != "" {
 		sc.stopReason = ev.Delta.StopReason
 	}
-	switch sc.sourceFormat {
+	switch sc.outputFormat {
 	case "chat-completions":
 		return sc.dispatchOpenAI(etype, &ev, events)
 	case "responses":
 		return sc.dispatchResponses(etype, &ev, events)
 	default:
-		return false, shared.UnsupportedFormat(sc.sourceFormat, EndpointPath)
+		return false, shared.UnsupportedFormat(sc.outputFormat, EndpointPath)
 	}
 }
 
@@ -233,359 +229,6 @@ func (sc *StreamConverter) dispatchClaude(etype, data string, raw []byte, events
 	return etype == "message_stop", nil
 }
 
-// dispatchOpenAI synthesizes chat.completion.chunk frames (FR-006).
-func (sc *StreamConverter) dispatchOpenAI(etype string, ev *sseEvent, events *[][]byte) (bool, *errclass.Error) {
-	switch etype {
-	case "message_start":
-		sc.msgID = ev.Message.ID
-		sc.model = ev.Message.Model
-		sc.promptTokens = int64(ev.Message.Usage.InputTokens)
-		sc.captureCache(ev.Message.Usage)
-		sc.emitRole(events)
-	case "content_block_start":
-		bs := &blockState{kind: ev.ContentBlock.Type, id: ev.ContentBlock.ID, name: ev.ContentBlock.Name, textOffset: sc.textRunes}
-		if bs.kind == "text" {
-			bs.text.WriteString(ev.ContentBlock.Text)
-			sc.textRunes += utf8.RuneCountInString(ev.ContentBlock.Text)
-		}
-		if bs.kind == "server_tool_use" && bs.name == "web_search" {
-			var input struct {
-				Query string `json:"query"`
-			}
-			json.Unmarshal(ev.ContentBlock.Input, &input)
-			bs.search = &shared.HostedSearch{ID: bs.id, Query: input.Query, Status: "in_progress"}
-			sc.search[bs.id] = bs
-		}
-		if bs.kind == "tool_use" {
-			bs.ordinal = sc.toolOrdinal
-			sc.toolOrdinal++
-			sc.toolsSeen = true
-		}
-		sc.blocks[int(ev.Index)] = bs
-		if bs.search != nil || bs.kind == "web_search_tool_result" {
-			sc.respTools.Report("messages", "chat-completions", "content."+bs.kind, true)
-		}
-		if bs.kind == "text" && ev.ContentBlock.Text != "" {
-			sc.emitRole(events)
-			sc.emitChunk(events, map[string]any{"content": ev.ContentBlock.Text}, "", false)
-		}
-		sc.emitCitations(bs, ev.ContentBlock.Citations, events)
-
-		if bs.kind == "thinking" && ev.ContentBlock.Thinking != "" {
-			sc.emitRole(events)
-			sc.emitChunk(events, map[string]any{"reasoning_content": ev.ContentBlock.Thinking}, "", false)
-		}
-	case "content_block_delta":
-		bs := sc.blocks[int(ev.Index)]
-		switch ev.Delta.Type {
-		case "text_delta":
-			if bs != nil {
-				bs.text.WriteString(ev.Delta.Text)
-				sc.textRunes += utf8.RuneCountInString(ev.Delta.Text)
-			}
-			sc.emitRole(events)
-			sc.emitChunk(events, map[string]any{"content": ev.Delta.Text}, "", false)
-		case "citations_delta":
-			sc.emitCitations(bs, json.RawMessage("["+string(ev.Delta.Citation)+"]"), events)
-		case "input_json_delta":
-			if bs != nil && bs.search != nil {
-				bs.args.WriteString(ev.Delta.PartialJSON)
-				break
-			}
-			if bs == nil || bs.kind != "tool_use" {
-				return false, errclass.Translation("tool arguments fragment without a tool_use block start")
-			}
-			var tc map[string]any
-			if !bs.emitted {
-				tc = shared.CCToolCallOpeningEntry(bs.ordinal, bs.id, bs.name, ev.Delta.PartialJSON)
-				bs.emitted = true
-			} else {
-				tc = map[string]any{
-					"index":    bs.ordinal,
-					"function": map[string]any{"arguments": ev.Delta.PartialJSON},
-				}
-			}
-			sc.emitRole(events)
-			sc.emitChunk(events, map[string]any{"tool_calls": []any{tc}}, "", false)
-		case "thinking_delta":
-			if bs != nil && bs.kind == "thinking" {
-				sc.emitRole(events)
-				sc.emitChunk(events, map[string]any{"reasoning_content": ev.Delta.Thinking}, "", false)
-			}
-		}
-	case "content_block_stop":
-		if bs := sc.blocks[int(ev.Index)]; bs != nil {
-			bs.closed = true
-		}
-	case "message_delta":
-		if ev.Usage.InputTokens != 0 {
-			sc.promptTokens = int64(ev.Usage.InputTokens)
-		}
-		sc.completionTokens = int64(ev.Usage.OutputTokens)
-		sc.captureCache(ev.Usage)
-		// Observed tool calls outrank the status-derived reason: a
-		// terminal max_tokens cannot downgrade tool_calls to length.
-		if sc.stopReason == "" || sc.terminalSent {
-			break
-		}
-		sc.terminalSent = true
-		sc.emitChunk(events, map[string]any{},
-			shared.TerminalReason(sc.toolsSeen, "tool_calls",
-				shared.ClaudeStopToFinish(ev.Delta.StopReason)), true)
-	case "message_stop":
-		return true, nil
-	case "error":
-		return false, sseError(ev.Error)
-	default: // ping and unknown event types are ignored (forward compat)
-	}
-	return false, nil
-}
-
-// dispatchResponses synthesizes Responses SSE events (FR-006).
-func (sc *StreamConverter) dispatchResponses(etype string, ev *sseEvent, events *[][]byte) (bool, *errclass.Error) {
-	switch etype {
-	case "message_start":
-		sc.msgID = ev.Message.ID
-		sc.model = ev.Message.Model
-		sc.promptTokens = int64(ev.Message.Usage.InputTokens)
-		sc.captureCache(ev.Message.Usage)
-		// Lifecycle parity with the Chat Completions route's synthesizer:
-		// announce the response before any deltas reference it (F18).
-		*events = append(*events, sc.responsesEm().Created())
-	case "content_block_start":
-		bs := &blockState{kind: ev.ContentBlock.Type, id: ev.ContentBlock.ID, name: ev.ContentBlock.Name, textOffset: sc.textRunes}
-		if bs.kind == "text" {
-			bs.text.WriteString(ev.ContentBlock.Text)
-			sc.textRunes += utf8.RuneCountInString(ev.ContentBlock.Text)
-		}
-		if bs.kind == "server_tool_use" && bs.name == "web_search" {
-			var input struct {
-				Query string `json:"query"`
-			}
-			json.Unmarshal(ev.ContentBlock.Input, &input)
-			bs.search = &shared.HostedSearch{ID: bs.id, Query: input.Query, Status: "in_progress"}
-			sc.search[bs.id] = bs
-		}
-		sc.blocks[int(ev.Index)] = bs
-		// Announce each translatable item before its first delta (F18
-		// lifecycle parity), including visible thinking blocks. Indexes come
-		// from the SAME compacted
-		// space outputItems() renders, so streamed output_index values
-		// always match terminal response.completed.output positions.
-		switch bs.kind {
-		case "thinking":
-			bs.id = fmt.Sprintf("%s_reasoning_%d", sc.msgID, int(ev.Index))
-			bs.outIdx = sc.outCount
-			sc.outCount++
-			*events = append(*events, sc.responsesEm().ReasoningAdded(bs.id, bs.outIdx)...)
-			bs.text.WriteString(ev.ContentBlock.Thinking)
-			if ev.ContentBlock.Thinking != "" {
-				*events = append(*events, sc.responsesEm().ReasoningDelta(bs.id, bs.outIdx, ev.ContentBlock.Thinking))
-			}
-		case "text":
-			if sc.msgIdx >= 0 {
-				break // one message item aggregates every text block (canonical shape)
-			}
-			sc.msgIdx = sc.outCount
-			sc.outCount++
-			// Native-compatible shape: the announced item carries "id" so
-			// downstream output_text.delta item_ids resolve (F-R3 parity).
-			*events = append(*events, sc.responsesEm().ItemAdded(sc.msgIdx, map[string]any{
-				"type": "message", "id": sc.msgID, "role": "assistant", "content": []any{},
-			}))
-		case "server_tool_use":
-			if bs.search == nil {
-				return false, errclass.Translation("unsupported server tool")
-			}
-			bs.outIdx = sc.outCount
-			sc.outCount++
-			*events = append(*events, sc.responsesEm().ItemAdded(bs.outIdx, bs.search.ResponseItem()))
-		case "web_search_tool_result":
-			if owner := sc.search[ev.ContentBlock.ToolUseID]; owner != nil {
-				shared.ReadSearchResults(owner.search, ev.ContentBlock.Content, "messages", "responses", "content.web_search_tool_result", sc.respTools)
-				*events = append(*events, sc.responsesEm().SearchDone(owner.outIdx, *owner.search)...)
-				owner.searchDone = true
-			} else {
-				sc.respTools.Report("messages", "responses", "content.web_search_tool_result", true)
-			}
-		case "tool_use":
-			if sc.respTools.IsShell(bs.name) {
-				if err := shared.ValidateShellCallID(bs.id); err != nil {
-					return false, err
-				}
-			}
-			if sc.respTools.IsShell(bs.name) && shared.HasContent(ev.ContentBlock.Input) {
-				var input map[string]json.RawMessage
-				if json.Unmarshal(ev.ContentBlock.Input, &input) != nil {
-					return false, errclass.Translation("shell tool input must be an object")
-				}
-				if len(input) > 0 {
-					bs.args.Write(ev.ContentBlock.Input)
-				}
-			}
-			sc.toolsSeen = true
-			bs.outIdx = sc.outCount
-			sc.outCount++
-			*events = append(*events, sc.responsesEm().ItemAdded(bs.outIdx, map[string]any{
-				"type": "function_call", "call_id": bs.id, "name": bs.name, "arguments": "",
-			}))
-		}
-		if bs.kind == "text" && ev.ContentBlock.Text != "" {
-			*events = append(*events, sc.responsesEm().TextDelta(sc.msgID, sc.msgIdx, ev.ContentBlock.Text))
-		}
-		sc.emitCitations(bs, ev.ContentBlock.Citations, events)
-
-	case "content_block_delta":
-		idx := int(ev.Index)
-		bs := sc.blocks[idx]
-		switch ev.Delta.Type {
-		case "text_delta":
-			if bs != nil {
-				bs.text.WriteString(ev.Delta.Text)
-				sc.textRunes += utf8.RuneCountInString(ev.Delta.Text)
-			}
-			// Deltas target the single aggregated message item, so later
-			// text blocks reference its announced position, never their own.
-			dIdx := idx
-			if sc.msgIdx >= 0 {
-				dIdx = sc.msgIdx
-			}
-			*events = append(*events, sc.responsesEm().TextDelta(sc.msgID, dIdx, ev.Delta.Text))
-		case "citations_delta":
-			sc.emitCitations(bs, json.RawMessage("["+string(ev.Delta.Citation)+"]"), events)
-		case "input_json_delta":
-			if bs != nil && bs.search != nil {
-				bs.args.WriteString(ev.Delta.PartialJSON)
-				break
-			}
-			if bs == nil || bs.kind != "tool_use" {
-				return false, errclass.Translation("tool arguments fragment without a tool_use block start")
-			}
-			bs.args.WriteString(ev.Delta.PartialJSON)
-			if sc.respTools.IsShell(bs.name) {
-				// Buffer JSON until a complete shell action is available.
-			} else if sc.respTools.IsCustom(bs.name) {
-				// Same wrapped-JSON accumulation as the Chat
-				// Completions route: raw fragments never reach the
-				// client, only newly-unwrapped input tails.
-				if tail := shared.CustomInputTail(bs.args.String(), &bs.customEmitted); tail != "" {
-					*events = append(*events, sc.responsesEm().InputDelta(bs.id, bs.outIdx, tail))
-				}
-			} else {
-				*events = append(*events, sc.responsesEm().ArgsDelta(bs.id, bs.outIdx, ev.Delta.PartialJSON))
-			}
-		case "thinking_delta":
-			if bs != nil && bs.kind == "thinking" {
-				bs.text.WriteString(ev.Delta.Thinking)
-				*events = append(*events, sc.responsesEm().ReasoningDelta(bs.id, bs.outIdx, ev.Delta.Thinking))
-			}
-		}
-	case "content_block_stop":
-		if bs := sc.blocks[int(ev.Index)]; bs != nil {
-			bs.closed = true
-			if bs.search != nil && bs.args.Len() > 0 {
-				var input struct {
-					Query string `json:"query"`
-				}
-				if json.Unmarshal([]byte(bs.args.String()), &input) != nil {
-					return false, errclass.Translation("invalid web search input")
-				}
-				bs.search.Query = input.Query
-				bs.search.Status = "searching"
-			}
-		}
-	case "message_delta":
-		if ev.Usage.InputTokens != 0 {
-			sc.promptTokens = int64(ev.Usage.InputTokens)
-		}
-		sc.completionTokens = int64(ev.Usage.OutputTokens) // accumulated, reported on completion
-		sc.captureCache(ev.Usage)
-		if ev.Delta.StopReason != "" {
-			sc.stopReason = ev.Delta.StopReason
-		}
-	case "message_stop":
-		if err := sc.validateShellTools(); err != nil {
-			return false, err
-		}
-		*events = append(*events, sc.responsesCompleted()...)
-		return true, nil
-	case "error":
-		return false, sseError(ev.Error)
-	default: // ping and unknown event types are ignored (forward compat)
-	}
-	return false, nil
-}
-
-// responsesCompleted builds the terminal event sequence: item lifecycle
-// completion events for every rendered output item followed by
-// response.completed — shape parity with the non-stream
-// claudeToResponses converter for the terminal payload, with status from
-// the Responses vocabulary {completed, incomplete} via the observed
-// stop_reason (max_tokens truncation → incomplete); tool calls are
-// represented by their function_call output items and never override the
-// status (FR-006). Shared by message_stop and Flush so an early upstream
-// close cannot diverge from the normal-path shape.
-func (sc *StreamConverter) responsesCompleted() [][]byte {
-	status := shared.ResponseStatusFromClaudeStop(sc.stopReason)
-	usage := shared.NewResponsesUsageFrom(sc.promptTokens+valueOrZero(sc.cacheRead)+valueOrZero(sc.cacheCreation), sc.completionTokens,
-		shared.UsageDetails{CachedTokens: sc.cacheRead, CacheWriteTokens: sc.cacheCreation})
-	items := sc.outputItems()
-	em := sc.responsesEm()
-	out := make([][]byte, 0, len(items)*2+1)
-	for idx, item := range items {
-		if hosted, ok := item.(map[string]any); ok && hosted["type"] == "web_search_call" {
-			id, _ := hosted["id"].(string)
-			if bs := sc.search[id]; bs != nil && !bs.searchDone {
-				out = append(out, em.SearchDone(idx, *bs.search)...)
-				bs.searchDone = true
-			}
-			continue
-		}
-		v, ok := item.(shared.RespItem)
-		if !ok {
-			continue
-		}
-		switch v.Type {
-		case "reasoning":
-			out = append(out, em.ReasoningDone(v, idx)...)
-		case "message":
-			text := responsesMessageText(v.Content)
-			_ = text
-			out = append(out, em.MessageDone(v, idx)...)
-		case "function_call":
-			out = append(out, em.ArgsDone(v.CallID, idx, v.Name, v.Arguments), em.ItemDone(idx, v))
-		case "custom_tool_call":
-			out = append(out, em.InputDone(v.CallID, idx, v.Input), em.ItemDone(idx, v))
-		case "shell_call":
-			out = append(out, em.ItemDone(idx, v))
-		}
-	}
-	return append(out, em.Completed(status, usage, items))
-}
-
-// responsesMessageText extracts the aggregated output_text from a rendered
-// message item's content parts.
-func responsesMessageText(content []byte) string {
-	var parts []struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(content, &parts); err != nil {
-		return ""
-	}
-	var b strings.Builder
-	for _, p := range parts {
-		b.WriteString(p.Text)
-	}
-	return b.String()
-}
-
-// responsesEm binds the shared Responses emitter kernel to the captured
-// upstream message identity so this route's frames cannot diverge from the
-// sibling Chat-Completions-route synthesizer (FR-006).
-func (sc *StreamConverter) responsesEm() shared.ResponsesEventEmitter {
-	return shared.ResponsesEventEmitter{ID: sc.msgID, Model: sc.model, Tools: sc.respTools}
-}
-
 // Flush emits a deferred Responses terminal only after stop_reason was
 // observed. EOF without a terminal state must be checked with Finish. Native
 // Messages and Chat Completions have no deferred events. One-shot, and a
@@ -598,7 +241,7 @@ func (sc *StreamConverter) Flush() [][]byte {
 		return nil
 	}
 	sc.flushed = true
-	switch sc.sourceFormat {
+	switch sc.outputFormat {
 	case "responses":
 		return sc.responsesCompleted()
 	case "chat-completions":
@@ -619,17 +262,17 @@ func (sc *StreamConverter) Finish() ([][]byte, *errclass.Error) {
 	sc.framer.End()
 	events, done, eErr := sc.Feed(nil)
 	if eErr != nil {
-		return nil, eErr
+		return events, eErr
 	}
 	if done {
 		return events, nil
 	}
 	if sc.stopReason == "" {
-		return nil, errclass.Translation("Messages stream ended before a terminal state")
+		return events, errclass.Translation("Messages stream ended before a terminal state")
 	}
-	if sc.sourceFormat == "responses" {
+	if sc.outputFormat == "responses" {
 		if err := sc.validateShellTools(); err != nil {
-			return nil, err
+			return events, err
 		}
 	}
 	return append(events, sc.Flush()...), nil
@@ -637,7 +280,7 @@ func (sc *StreamConverter) Finish() ([][]byte, *errclass.Error) {
 
 func (sc *StreamConverter) validateShellTools() *errclass.Error {
 	for _, block := range sc.blocks {
-		if sc.respTools.IsShell(block.name) {
+		if sc.context.IsShell(block.name) {
 			if err := shared.ValidateShellCallID(block.id); err != nil {
 				return err
 			}
@@ -647,74 +290,6 @@ func (sc *StreamConverter) validateShellTools() *errclass.Error {
 		}
 	}
 	return nil
-}
-
-// outputItems materializes the Responses output array from observed
-// content blocks in upstream index order (FR-006) through the shared
-// OutputAssembler: ALL text blocks aggregate into ONE message item
-// positioned at the first text block's slot while tool_use blocks become
-// separate function_call items — the canonical native shape, equal to the
-// non-stream claudeToResponses converter (FR-006 mode parity); thinking
-// blocks become reasoning summaries.
-func (sc *StreamConverter) outputItems() []any {
-	indexes := make([]int, 0, len(sc.blocks))
-	for i := range sc.blocks {
-		indexes = append(indexes, i)
-	}
-	sort.Ints(indexes)
-	oa := shared.NewOutputAssembler(sc.msgID, sc.respTools)
-	for _, i := range indexes {
-		bs := sc.blocks[i]
-		switch bs.kind {
-		case "thinking":
-			oa.AppendReasoning(bs.id, bs.text.String())
-		case "text":
-			oa.ReserveTextSlot()
-			oa.AddText(bs.text.String())
-		case "server_tool_use":
-			if bs.search != nil {
-				shared.FinalizeSearch(bs.search, sc.respTools)
-				oa.AppendItem(bs.search.ResponseItem())
-			}
-		case "tool_use":
-			oa.AppendFunctionCall(bs.id, bs.name, shared.DefaultArgs(bs.args.String()))
-		}
-	}
-	oa.AddCitations(sc.citations)
-	return oa.Render()
-}
-
-// chatChunks binds the shared chunk kernel to the captured upstream
-// message identity so this route's frames cannot diverge from the
-// sibling Responses-route synthesizer (FR-006).
-func (sc *StreamConverter) chatChunks() shared.ChatChunkBuilder {
-	return shared.ChatChunkBuilder{ID: sc.msgID, Model: sc.model, Created: sc.created}
-}
-
-// emitRole guarantees the leading assistant-role chunk openai clients expect.
-func (sc *StreamConverter) emitRole(events *[][]byte) {
-	if sc.roleSent {
-		return
-	}
-	sc.roleSent = true
-	*events = append(*events, sc.chatChunks().RoleChunk())
-}
-
-// emitChunk appends one synthesized chat.completion.chunk frame via the
-// shared kernel; an empty finish renders null (intermediate chunks) and
-// withUsage attaches the accumulated token usage to the terminal frame.
-func (sc *StreamConverter) emitChunk(events *[][]byte, delta map[string]any, finish string, withUsage bool) {
-	b := sc.chatChunks()
-	if finish == "" {
-		*events = append(*events, b.Delta(delta))
-		return
-	}
-	var usage map[string]any
-	if withUsage {
-		usage = shared.CCUsageFrom(sc.promptTokens+valueOrZero(sc.cacheRead)+valueOrZero(sc.cacheCreation), sc.completionTokens,
-			shared.UsageDetails{CachedTokens: sc.cacheRead, CacheWriteTokens: sc.cacheCreation})
-	}
-	*events = append(*events, b.Finish(finish, usage))
 }
 
 func (sc *StreamConverter) captureCache(u usageCounts) {
@@ -774,21 +349,21 @@ func (sc *StreamConverter) emitCitations(block *blockState, raw json.RawMessage,
 	if block == nil || block.kind != "text" || len(raw) == 0 {
 		return
 	}
-	citations := shared.DecodeCitations(raw, "messages", sc.sourceFormat, "content.citations", block.text.String(), block.textOffset, sc.respTools)
+	citations := shared.DecodeCitations(raw, "messages", sc.outputFormat, "content.citations", block.text.String(), block.textOffset, sc.context)
 	for _, c := range citations {
-		encoded, _ := json.Marshal(c.Wire(sc.sourceFormat))
+		encoded, _ := json.Marshal(c.Wire(sc.outputFormat))
 		key := fmt.Sprintf("%d/%s", block.textOffset, encoded)
 		if sc.citationKeys[key] {
 			continue
 		}
 		sc.citationKeys[key] = true
-		if sc.sourceFormat == "chat-completions" {
+		if sc.outputFormat == "chat-completions" {
 			sc.emitRole(events)
 			sc.emitChunk(events, map[string]any{"annotations": shared.CitationValues([]shared.Citation{c}, "chat-completions")}, "", false)
 		} else {
 			index := len(sc.citations)
 			sc.citations = append(sc.citations, c)
-			*events = append(*events, sc.responsesEm().AnnotationAdded(sc.msgID, sc.msgIdx, 0, index, c))
+			*events = append(*events, sc.responsesEm().AnnotationAdded(sc.msgID, sc.responses.msgIdx, 0, index, c))
 		}
 	}
 }

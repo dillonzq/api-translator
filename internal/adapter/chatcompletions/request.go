@@ -1,4 +1,5 @@
 // Package chatcompletions implements Chat Completions protocol conversion.
+
 package chatcompletions
 
 import (
@@ -18,14 +19,14 @@ const EndpointPath = "/v1/chat/completions"
 // Reasoning controls are not filtered or clamped. Unknown formats are ClassUnsupported; malformed
 // input is ClassTranslation. Errors are descriptive and redacted — no
 // silent loss of tools or reasoning controls.
-func BuildRequest(upstreamModel, sourceFormat string, sourceBody []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func BuildRequest(upstreamModel, sourceFormat string, sourceBody []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	switch sourceFormat {
 	case "chat-completions":
 		return buildOpenAIRequest(upstreamModel, sourceBody)
 	case "messages":
-		return claudeToChat(upstreamModel, sourceBody, shared.ResponseToolContext(tools))
+		return claudeToChat(upstreamModel, sourceBody, shared.ContextOrNew(tools))
 	case "responses":
-		return responsesToChat(upstreamModel, sourceBody, shared.ResponseToolContext(tools))
+		return responsesToChat(upstreamModel, sourceBody, shared.ContextOrNew(tools))
 	default:
 		return nil, shared.UnsupportedFormat(sourceFormat, EndpointPath)
 	}
@@ -93,7 +94,7 @@ type claudeBlock = map[string]any
 // (max_tokens defaulted by the shared kernel, FR-005), and the thinking
 // control maps to reasoning_effort through fixed protocol conversion. The
 // shared Claude-request kernel owns decoding; target-shape rendering stays local.
-func claudeToChat(upstreamModel string, body []byte, ctx ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func claudeToChat(upstreamModel string, body []byte, ctx ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	src, eErr := shared.DecodeClaudeMessages(body)
 	if eErr != nil {
 		return nil, eErr
@@ -171,7 +172,7 @@ func claudeToChat(upstreamModel string, body []byte, ctx ...*shared.ResponseTool
 			Function: shared.CCFunction{Name: t.Name, Description: t.Description, Parameters: schema, Strict: t.Strict},
 		})
 	}
-	format, err := shared.ConvertOutputFormat("messages", "chat-completions", src.OutputConfig, shared.ResponseToolContext(ctx))
+	format, err := shared.ConvertOutputFormat("messages", "chat-completions", src.OutputConfig, shared.ContextOrNew(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +280,6 @@ func claudeAssistantMessage(m *shared.ClaudeMessageRecord) (*ccMessage, *errclas
 }
 
 // ---- Responses (Responses) -> Chat Completions (FR-005) ----
-
 // responsesToChat translates an OpenAI Responses request into a Chat
 // Completions request (FR-005): instructions and system items become
 // system messages, message items map by role, function_call items merge
@@ -289,7 +289,7 @@ func claudeAssistantMessage(m *shared.ClaudeMessageRecord) (*ccMessage, *errclas
 // same field), and max_output_tokens maps to max_tokens. Historical
 // reasoning items are omitted (no CC equivalent; FR-005 explicit omission
 // policy).
-func responsesToChat(upstreamModel string, body []byte, tools *shared.ResponseTools) ([]byte, *errclass.Error) {
+func responsesToChat(upstreamModel string, body []byte, tools *shared.ConversionContext) ([]byte, *errclass.Error) {
 	var src shared.ResponsesRequest
 	if err := json.Unmarshal(body, &src); err != nil {
 		return nil, errclass.Translation("malformed Responses request JSON: " + err.Error())

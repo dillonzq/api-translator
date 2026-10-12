@@ -199,6 +199,6 @@ logprobs、供应商扩展、历史 compaction 和签名不保证跨协议保留
 
 ## 实现与验证
 
-根包提供公开入口、请求策略和传输边界；各协议 adapter 的 `request.go`、`convert.go`、`stream.go` 负责转换。工具规范化、schema、引用、搜索和诊断的共享逻辑位于 `internal/adapter/shared`，推理控制与后缀位于 `thinking`。
+根包提供公开入口、请求策略和传输边界；各协议 adapter 负责直接转换、上游事件分派和目标流式输出。共享协议类型、事件构造、工具身份和字段规则按职责分文件，位于 `internal/adapter/shared`；推理控制与后缀位于 `thinking`。模块与状态约定见[代码结构说明](architecture.zh-CN.md)。
 
 测试覆盖 27 份请求/响应/流式快照、交错工具、晚到身份、引用分片、搜索失败、终止一致性及本地 shell 恢复/错误路径。fuzz 验证网络分块一致性和失败状态不可恢复；这些测试不替代真实上游的兼容验证。命令见 README。

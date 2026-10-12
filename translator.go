@@ -21,17 +21,17 @@ const (
 // reuse it across executions or mutate it concurrently with response conversion.
 type RequestState struct {
 	Options ConversionOptions
-	tools   shared.ResponseTools
+	context shared.ConversionContext
 }
 
 func NewRequestState() *RequestState { return &RequestState{} }
 
-func toolState(state *RequestState) *shared.ResponseTools {
+func conversionContext(state *RequestState) *shared.ConversionContext {
 	if state == nil {
 		return nil
 	}
-	state.tools.Options = state.Options
-	return &state.tools
+	state.context.Options = state.Options
+	return &state.context
 }
 
 func validateFormats(formats ...string) *Error {

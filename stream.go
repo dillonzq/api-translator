@@ -3,6 +3,7 @@ package translator
 import (
 	"bytes"
 	"encoding/json"
+
 	"github.com/dillonzq/api-translator/internal/adapter/chatcompletions"
 	"github.com/dillonzq/api-translator/internal/adapter/messages"
 	"github.com/dillonzq/api-translator/internal/adapter/responses"
@@ -26,11 +27,11 @@ func NewStreamConverter(upstreamFormat, outputFormat string, state *RequestState
 	var converter StreamConverter
 	switch upstreamFormat {
 	case FormatChatCompletions:
-		converter = chatcompletions.NewStreamConverter(outputFormat, toolState(state))
+		converter = chatcompletions.NewStreamConverter(outputFormat, conversionContext(state))
 	case FormatMessages:
-		converter = messages.NewStreamConverter(outputFormat, toolState(state))
+		converter = messages.NewStreamConverter(outputFormat, conversionContext(state))
 	default:
-		converter = responses.NewStreamConverter(outputFormat, toolState(state))
+		converter = responses.NewStreamConverter(outputFormat, conversionContext(state))
 	}
 	if outputFormat == FormatChatCompletions {
 		converter = &chatSSEConverter{converter: converter}
