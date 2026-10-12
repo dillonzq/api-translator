@@ -163,6 +163,19 @@ Chat 的引用偏移只计入正文，不包含独立 refusal；Messages 将 ref
 
 Responses 的函数和自定义工具结果支持混合文本与图片。Responses → Messages 在 `tool_result.content` 中保留图文顺序，纯文本结果仍使用字符串。Responses → Chat 先输出连续的工具回复，再通过标注各 call ID 的额外用户消息承载混合结果；文本同时保留在工具回复及对应图片旁。空消息和 reasoning item 不会打断这组工具回复。
 
+用户消息新增文件、音频和视频输入转换，参考 [CLIProxyAPI 官方实现](https://github.com/router-for-me/CLIProxyAPI/tree/091ff27/internal/translator)。
+
+| 输入 | Chat Completions ↔ Responses | 与 Messages 的转换 |
+| --- | --- | --- |
+| 文件 | `file.file_id/file_data/filename` ↔ `input_file.file_id/file_data/filename` | PDF ↔ base64 文档源，纯文本 ↔ text 文档源；文件名映射到文档 `title` |
+| 文件 URL | Responses 保留 `file_url`；转 Chat 时报错 | Responses `file_url` ↔ Messages URL 文档 |
+| 音频 | `input_audio` 保留 `data`、`format`，也接受 Responses 顶层的 `data/format` | Messages 无音频输入块，报错 |
+| 视频 | `video_url` ↔ `input_video`，支持 URL 字符串或对象，保留 `processing` | Messages 无视频输入块，报错 |
+
+混合文本、图片和媒体按原顺序保留。视频同时提供顶层和嵌套 `processing` 时，顶层值优先。Messages 文本来源文档会编码为 `text/plain` 的 base64 文件；转换回 Messages 时解码并验证 UTF-8，生成 `source.type="text"`、`media_type="text/plain"`。只有 `application/pdf` 使用 base64 文档源；其他或未知 MIME（包括无 MIME 的原始 base64）转 Messages 时明确拒绝，不根据文件名推断类型。文档 `context` 和 `citations` 配置无法跨协议保留，会记录语义损耗，Safe/Strict 拒绝。文件 ID 只在两种 OpenAI 协议之间保留，转 Messages 时报错；调用方须确保 ID 对目标上游有效。
+
+此支持针对用户输入；system、assistant 和无法表示的工具结果媒体会报错。转换器不读取本地文件、不下载 URL，也不上传文件；调用方负责提供文件内容、可访问的 URL 或有效 ID。空媒体、错误字段类型和无法解码的文档 base64 会报错。同协议请求仍保留所有原生字段，只改写模型。输入格式转换不代表目标模型支持该媒体或 MIME；音频、视频输出仍未支持。
+
 请求可转换支持的图片 URL 和 base64 来源；system 图片及无法表示的工具结果会报错。响应中 Chat → Messages 可转换支持的图片块，Chat → Responses 的非文本输出及未支持的 Messages 内容块会报错。图像生成结果、音频和更多多模态输出尚不支持。未知 Responses item/part 用原始 JSON 检查实际载荷，包含 `result` / `action` 等未建模内容且无法表示时会报错，不静默生成成功的空结果。
 
 logprobs、供应商扩展、历史 compaction 和签名不保证跨协议保留。原生保留字段也不意味着任何上游模型都接受这些内容；调用方负责能力验证。

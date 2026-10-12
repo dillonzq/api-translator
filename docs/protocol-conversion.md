@@ -163,6 +163,19 @@ Page/document-location citations and encrypted citation metadata have no complet
 
 Responses function and custom tool outputs can contain mixed text and images. Responses → Messages preserves their order inside `tool_result.content`, retaining the string representation for text-only results. Responses → Chat keeps consecutive tool replies together, then emits mixed results in an additional user message labeled with each call ID; text appears both in the tool reply and alongside its images. Empty messages and reasoning items do not interrupt this grouping.
 
+User messages support file, audio, and video input conversion, following the [official CLIProxyAPI implementation](https://github.com/router-for-me/CLIProxyAPI/tree/091ff27/internal/translator).
+
+| Input | Chat Completions ↔ Responses | Messages conversion |
+| --- | --- | --- |
+| File | `file.file_id/file_data/filename` ↔ `input_file.file_id/file_data/filename` | PDF ↔ base64 document sources, plain text ↔ text document sources; filenames map to document `title` |
+| File URL | Responses preserves `file_url`; conversion to Chat fails | Responses `file_url` ↔ Messages URL documents |
+| Audio | `input_audio` preserves `data` and `format`; flat Responses `data/format` is also accepted | Unsupported: Messages has no audio input block |
+| Video | `video_url` ↔ `input_video`, accepting string or object URLs and preserving `processing` | Unsupported: Messages has no video input block |
+
+Mixed text, images, and media retain their order. Top-level video `processing` overrides the nested value. Messages text-source documents become base64 `text/plain` files; conversion back to Messages decodes and validates UTF-8 before emitting `source.type="text"` with `media_type="text/plain"`. Only `application/pdf` uses a base64 document source. Other or unknown MIME types, including raw base64 without MIME, fail when converting to Messages; filenames are not used to infer types. Document `context` and `citations` settings report semantic loss and fail under Safe/Strict. File IDs are preserved only between OpenAI protocols; conversion to Messages fails. Callers must ensure that IDs are valid for the target upstream.
+
+This support covers user input. Media in system or assistant messages and unrepresentable tool outputs fails. The library does not read local files, fetch URLs, or upload files: callers supply inline content, accessible URLs, or valid IDs. Missing media, invalid field types, and invalid document base64 fail. Same-protocol requests continue to preserve native fields and rewrite only the model. A convertible input does not imply model support for its media or MIME. Audio and video output remain unsupported.
+
 Requests can map supported image URLs and base64 sources; system images and unrepresentable tool results fail. In responses, Chat → Messages maps supported image blocks, while Chat → Responses non-text output and unsupported Messages blocks fail. Image-generation results, audio, and further multimodal output remain unsupported. Unknown Responses items/parts are checked using original JSON, including unmodeled `result` / `action` payloads. Unrepresentable actual content fails rather than silently producing a successful empty response.
 
 Logprobs, provider extensions, historical compaction, and signatures are not guaranteed across protocols. Preserving a field on a native path does not mean every upstream model accepts it; callers validate capabilities.

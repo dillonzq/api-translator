@@ -25,7 +25,7 @@ Go module: `github.com/dillonzq/api-translator`; package: `translator`.
 
 ## Supported protocols
 
-All six cross-protocol directions are supported, along with same-protocol request model rewriting and response passthrough. Conversion covers text, function tools, reasoning, usage, structured output, and representable URL citations. See [protocol conversion](docs/protocol-conversion.md) for tool identity restoration, hosted search, and streaming limits.
+All six cross-protocol directions are supported, along with same-protocol request model rewriting and response passthrough. Conversion covers text, image/file/audio/video input, function tools, reasoning, usage, structured output, and representable URL citations. See [protocol conversion](docs/protocol-conversion.md) for media input directions and limits, tool identity restoration, hosted search, and streaming limits.
 
 | Constant | Format value | Protocol |
 | --- | --- | --- |

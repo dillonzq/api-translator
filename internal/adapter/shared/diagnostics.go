@@ -176,6 +176,13 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 	inspectBlock := func(block map[string]json.RawMessage, path string) {
 		var typ string
 		json.Unmarshal(block["type"], &typ)
+		if from == FormatMessages && typ == "document" {
+			for _, key := range []string{"context", "citations"} {
+				if HasContent(block[key]) {
+					add(path+"."+key, true)
+				}
+			}
+		}
 		if from == FormatMessages && (typ == "thinking" || typ == "redacted_thinking") {
 			add(path, true)
 		}

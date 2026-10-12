@@ -525,7 +525,7 @@ func TestFromClaudeMessagesErrors(t *testing.T) {
 		{"image unknown source type", `{"max_tokens":10,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"s3"}}]}]}`, errclass.ClassTranslation},
 		{"malformed tool_result payload", `{"max_tokens":10,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":42}]}]}`, errclass.ClassTranslation},
 		{"image inside tool_result rejected", `{"max_tokens":10,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"image","source":{"type":"url","url":"https://x/i.png"}}]}]}]}`, errclass.ClassTranslation},
-		{"unsupported block type", `{"max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"document","source":{"type":"text"}}]}]}`, errclass.ClassUnsupported},
+		{"unsupported block type", `{"max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"a"},{"type":"unknown","source":{"type":"text"}}]}]}`, errclass.ClassUnsupported},
 		{"malformed tool_choice", `{"max_tokens":10,"tool_choice":42}`, errclass.ClassTranslation},
 		{"unknown tool_choice type", `{"max_tokens":10,"tool_choice":{"type":"blowup"}}`, errclass.ClassTranslation},
 	}
