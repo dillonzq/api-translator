@@ -1,20 +1,156 @@
-name: Go
+name: CI
+
+# Reusable: release.yml calls this workflow to gate a release on the same checks.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+
+env:
+  # Keep CI output stable: a missing or stale requirement fails instead of
+  # being resolved silently, and `go mod tidy -diff` stays authoritative.
+  GOFLAGS: -mod=readonly
+  # Pinned so a toolchain release cannot break an unrelated pull request; the
+  # vulnerability database itself is always fetched live.
+  GOVULNCHECK_VERSION: v1.9.0
+  ACTIONLINT_VERSION: v1.7.12
+
 jobs:
-  test:
+  lint:
+    name: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
-          cache-dependency-path: go.mod
-      - run: go test -race ./...
-      - run: go vet ./...
       - name: Check formatting
-        run: test -z "$(gofmt -l .)"
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt required for: $(echo "$unformatted" | tr '\n' ' ')"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: Check go.mod is tidy
+        run: go mod tidy -diff
+      - name: Check the dependency graph is standard library only
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Import allow-lists match by prefix, so a sibling module such as
+          # github.com/dillonzq/api-translator-extra slips past them. Resolving
+          # the package graph is exact: third-party module paths always have a
+          # dot in their first path element, standard library paths never do.
+          third_party="$(go list -deps ./... | grep -E '^[^/]*\.[^/]*/' | grep -vE '^github\.com/dillonzq/api-translator($|/)' || true)"
+          if [ -n "$third_party" ]; then
+            echo "::error::this module must depend on the standard library only"
+            printf '%s\n' "$third_party"
+            exit 1
+          fi
+          echo "dependency graph is standard library only"
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          # Pinned: the checked-in .golangci.yml is validated against this release.
+          version: v2.14.0
+          args: --timeout=5m
+      - name: Lint workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@${{ env.ACTIONLINT_VERSION }} -color
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: go build ./...
+      - name: Test with race detector, shuffled order, and coverage
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race -shuffle=on -count=1 -covermode=atomic -coverprofile=coverage.out ./... 2>&1 | tee test.log
+      - name: Write coverage summary
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          {
+            echo "### Packages"
+            echo
+            echo '```'
+            grep -E '^(ok|FAIL|---)' test.log || true
+            echo '```'
+            if [ -f coverage.out ]; then
+              echo "### Total coverage"
+              echo
+              echo '```'
+              go tool cover -func=coverage.out | tail -n 1
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-output
+          path: |
+            coverage.out
+            test.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  fuzz:
+    name: fuzz smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Fuzz SSE chunk boundaries
+        run: go test . -run '^$' -fuzz '^FuzzStreamChunkBoundaries$' -fuzztime=30s
+      - name: Fuzz SSE failure is terminal
+        run: go test . -run '^$' -fuzz '^FuzzSSEFailureIsTerminal$' -fuzztime=30s
+      - name: Upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          # go test writes a crashing input to testdata/fuzz/<Target>/; keeping
+          # it lets the failure become a permanent regression case.
+          name: fuzz-failures
+          path: testdata/fuzz/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+  vuln:
+    name: vulnerability scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }} ./...
