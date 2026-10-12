@@ -1073,6 +1073,7 @@ type ResponsesResult struct {
 
 // RespTool is one Responses function tool.
 type RespTool struct {
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 	Type         string          `json:"type"` // "function" or "namespace"
 	Name         string          `json:"name"`
 	Description  string          `json:"description,omitempty"`
@@ -1152,30 +1153,32 @@ func (r *ResponsesRequest) DecodeInputItems() ([]RespItem, *errclass.Error) {
 // response.output_item.added announcement used); function_call items stay
 // call_id-only per the documented canonical shape.
 type RespItem struct {
-	Type        string             `json:"type"`
-	ID          string             `json:"id,omitempty"`
-	Role        string             `json:"role,omitempty"`
-	Content     json.RawMessage    `json:"content,omitempty"`
-	CallID      string             `json:"call_id,omitempty"`
-	Name        string             `json:"name,omitempty"`
-	Namespace   string             `json:"namespace,omitempty"`
-	Arguments   string             `json:"arguments,omitempty"`
-	Input       string             `json:"input,omitempty"`
-	Output      json.RawMessage    `json:"output,omitempty"`
-	Summary     []ReasoningSummary `json:"summary,omitempty"`
-	Tools       []RespTool         `json:"tools,omitempty"`
-	Action      json.RawMessage    `json:"action,omitempty"`
-	Status      string             `json:"status,omitempty"`
-	Environment json.RawMessage    `json:"environment,omitempty"`
+	CacheControl json.RawMessage    `json:"cache_control,omitempty"`
+	Type         string             `json:"type"`
+	ID           string             `json:"id,omitempty"`
+	Role         string             `json:"role,omitempty"`
+	Content      json.RawMessage    `json:"content,omitempty"`
+	CallID       string             `json:"call_id,omitempty"`
+	Name         string             `json:"name,omitempty"`
+	Namespace    string             `json:"namespace,omitempty"`
+	Arguments    string             `json:"arguments,omitempty"`
+	Input        string             `json:"input,omitempty"`
+	Output       json.RawMessage    `json:"output,omitempty"`
+	Summary      []ReasoningSummary `json:"summary,omitempty"`
+	Tools        []RespTool         `json:"tools,omitempty"`
+	Action       json.RawMessage    `json:"action,omitempty"`
+	Status       string             `json:"status,omitempty"`
+	Environment  json.RawMessage    `json:"environment,omitempty"`
 }
 
 // CCFunction is one Chat Completions tool function definition (decode and
 // emit; omitempty keeps absent descriptions/parameters off the wire).
 type CCFunction struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
-	Strict      *bool           `json:"strict,omitempty"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	Parameters   json.RawMessage `json:"parameters,omitempty"`
+	Strict       *bool           `json:"strict,omitempty"`
 }
 
 // CCToolCall is one Chat Completions tool call (decode and emit).
@@ -1190,16 +1193,18 @@ type CCToolCall struct {
 
 // CCMessage is one Chat Completions message.
 type CCMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content"` // string or typed parts
-	ToolCalls  []CCToolCall    `json:"tool_calls"`
-	ToolCallID string          `json:"tool_call_id"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+	Role         string          `json:"role"`
+	Content      json.RawMessage `json:"content"` // string or typed parts
+	ToolCalls    []CCToolCall    `json:"tool_calls"`
+	ToolCallID   string          `json:"tool_call_id"`
 }
 
 // CCTool is one Chat Completions tool definition.
 type CCTool struct {
-	Type     string     `json:"type"`
-	Function CCFunction `json:"function"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+	Type         string          `json:"type"`
+	Function     CCFunction      `json:"function"`
 }
 
 // ChatCompletionsRequest decodes an inbound Chat Completions request
@@ -1235,9 +1240,10 @@ func JoinTexts(parts []map[string]any) string {
 // ContentPart is one OpenAI-style content part decoded by
 // DecodeStringOrParts: text, an image URL, or file/audio/video media.
 type ContentPart struct {
-	Text     string
-	ImageURL string     // resolved image URL; empty for text parts
-	Media    *MediaPart // file, audio, or video input
+	CacheControl string
+	Text         string
+	ImageURL     string     // resolved image URL; empty for text parts
+	Media        *MediaPart // file, audio, or video input
 }
 
 // DecodeStringOrParts is THE shared string-or-parts kernel owning the
@@ -1261,9 +1267,10 @@ func DecodeStringOrParts(raw json.RawMessage, targetLabel string) ([]ContentPart
 		return []ContentPart{{Text: s}}, nil
 	}
 	var parts []struct {
-		Type     string          `json:"type"`
-		Text     string          `json:"text"`
-		ImageURL json.RawMessage `json:"image_url"`
+		CacheControl json.RawMessage `json:"cache_control"`
+		Type         string          `json:"type"`
+		Text         string          `json:"text"`
+		ImageURL     json.RawMessage `json:"image_url"`
 	}
 	if err := json.Unmarshal(raw, &parts); err != nil {
 		return nil, errclass.Translation("malformed message content: " + err.Error())
@@ -1280,7 +1287,7 @@ func DecodeStringOrParts(raw json.RawMessage, targetLabel string) ([]ContentPart
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, ContentPart{Media: m})
+			out = append(out, ContentPart{Media: m, CacheControl: string(p.CacheControl)})
 			continue
 		}
 		if p.Type == "image_url" || p.Type == "input_image" {
@@ -1288,11 +1295,11 @@ func DecodeStringOrParts(raw json.RawMessage, targetLabel string) ([]ContentPart
 			if eErr != nil {
 				return nil, eErr
 			}
-			out = append(out, ContentPart{ImageURL: url})
+			out = append(out, ContentPart{ImageURL: url, CacheControl: string(p.CacheControl)})
 			continue
 		}
 		if p.Text != "" { // uniform DROP policy: no dead text parts upstream
-			out = append(out, ContentPart{Text: p.Text})
+			out = append(out, ContentPart{Text: p.Text, CacheControl: string(p.CacheControl)})
 		}
 	}
 	return out, nil
@@ -1315,23 +1322,26 @@ func ClaudeBlocksFromOpenAI(raw json.RawMessage, target string) ([]map[string]an
 	}
 	var blocks []map[string]any
 	for _, p := range parts {
+		var block map[string]any
 		if p.Media != nil {
-			block, err := p.Media.Claude()
+			var err *errclass.Error
+			block, err = p.Media.Claude()
 			if err != nil {
 				return nil, err
 			}
-			blocks = append(blocks, block)
-			continue
-		}
-		if p.ImageURL != "" {
-			src, eErr := ImageSource(p.ImageURL)
-			if eErr != nil {
-				return nil, eErr
+		} else if p.ImageURL != "" {
+			var err *errclass.Error
+			block, err = ImageSource(p.ImageURL)
+			if err != nil {
+				return nil, err
 			}
-			blocks = append(blocks, src)
-			continue
+		} else {
+			block = map[string]any{"type": "text", "text": p.Text}
 		}
-		blocks = append(blocks, map[string]any{"type": "text", "text": p.Text})
+		if HasContent(json.RawMessage(p.CacheControl)) {
+			block["cache_control"] = json.RawMessage(p.CacheControl)
+		}
+		blocks = append(blocks, block)
 	}
 	return blocks, nil
 }
