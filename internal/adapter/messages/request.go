@@ -416,9 +416,9 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Respo
 			if eErr != nil {
 				return nil, eErr
 			}
-			content := any(shared.JoinTexts(blocks))
-			if hasNonText(blocks) {
-				content = blocks // mixed parts keep their per-part order
+			content, eErr := toolResultContent(blocks)
+			if eErr != nil {
+				return nil, eErr
 			}
 			b.add("user:tool", "user", anthropicBlock{
 				"type": "tool_result", "tool_use_id": m.ToolCallID, "content": content,
@@ -556,11 +556,9 @@ func fromResponses(upstreamModel string, body []byte, tools *shared.ResponseTool
 			if eErr != nil {
 				return nil, eErr
 			}
-			// Anthropic supports images inside tool_result content. Keep
-			// mixed blocks in order while retaining the text-only wire shape.
-			var content any = shared.JoinTexts(blocks)
-			if hasNonText(blocks) {
-				content = blocks
+			content, eErr := toolResultContent(blocks)
+			if eErr != nil {
+				return nil, eErr
 			}
 			b.add("user:tool", "user", anthropicBlock{
 				"type": "tool_result", "tool_use_id": item.CallID, "content": content,
@@ -678,4 +676,22 @@ func rejectNonText(blocks []anthropicBlock, system bool) *errclass.Error {
 		return shared.SystemImageRejected()
 	}
 	return errclass.Translation("assistant messages cannot carry image content")
+}
+
+// toolResultContent preserves text/image order and rejects document media.
+func toolResultContent(blocks []anthropicBlock) (any, *errclass.Error) {
+	images := false
+	for _, block := range blocks {
+		switch typ, _ := block["type"].(string); typ {
+		case "text":
+		case "image":
+			images = true
+		default:
+			return nil, shared.UnsupportedPartType(typ, "Messages tool_result.content")
+		}
+	}
+	if images {
+		return blocks, nil
+	}
+	return shared.JoinTexts(blocks), nil
 }

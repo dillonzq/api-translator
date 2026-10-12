@@ -178,7 +178,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 		json.Unmarshal(block["type"], &typ)
 		if from == FormatMessages && typ == "document" {
 			for _, key := range []string{"context", "citations"} {
-				if len(block[key]) > 0 {
+				if HasContent(block[key]) {
 					add(path+"."+key, true)
 				}
 			}

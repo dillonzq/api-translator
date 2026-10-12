@@ -2,6 +2,7 @@ package translator_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -232,5 +233,52 @@ func TestMessagesTextDocumentRoundTrip(t *testing.T) {
 				t.Fatalf("unexpected losses: %v", state.Diagnostics())
 			}
 		})
+	}
+}
+
+func TestMessagesToolResultsRejectDocuments(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, kind := range []string{"chat-tool", "function_call_output", "custom_tool_call_output"} {
+			for _, file := range []string{
+				`{"type":"input_file","file_data":"data:application/pdf;base64,JVBERg=="}`,
+				`{"type":"input_file","file_data":"data:text/plain;base64,aGVsbG8="}`,
+				`{"type":"input_file","file_url":"https://example.test/a.pdf"}`,
+			} {
+				t.Run(fmt.Sprintf("%s/stream=%t/%s", kind, stream, file), func(t *testing.T) {
+					from := translator.FormatResponses
+					parts := `[{"type":"text","text":"before"},{"type":"input_image","image_url":"https://example.test/a.png"},` + file + `,{"type":"text","text":"after"}]`
+					payload := fmt.Sprintf(`{"stream":%t,"input":[{"type":%q,"call_id":"c1","output":%s}]}`, stream, kind, parts)
+					if kind == "chat-tool" {
+						from = translator.FormatChatCompletions
+						var part map[string]any
+						json.Unmarshal([]byte(file), &part)
+						delete(part, "type")
+						chatFile, _ := json.Marshal(map[string]any{"type": "file", "file": part})
+						parts = `[{"type":"text","text":"before"},{"type":"image_url","image_url":{"url":"https://example.test/a.png"}},` + string(chatFile) + `,{"type":"text","text":"after"}]`
+						payload = fmt.Sprintf(`{"stream":%t,"messages":[{"role":"tool","tool_call_id":"c1","content":%s}]}`, stream, parts)
+					}
+					body, err := translator.ConvertRequest(translator.FormatMessages, "upstream", from, []byte(payload), translator.NewRequestState())
+					if err == nil || err.Class != translator.ClassUnsupported || body != nil {
+						t.Fatalf("body=%s, error=%v", body, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestNullDocumentMetadataHasNoLoss(t *testing.T) {
+	input := mediaRequest(translator.FormatMessages, "user", `[{"type":"document","context":null,"citations":null,"source":{"type":"base64","media_type":"application/pdf","data":"JVBERg=="}}]`)
+	for _, to := range []string{translator.FormatChatCompletions, translator.FormatResponses} {
+		for _, policy := range []translator.LossPolicy{translator.LossPolicyAllow, translator.LossPolicySafe, translator.LossPolicyStrict} {
+			state := translator.NewRequestState()
+			state.Options.LossPolicy = policy
+			if _, err := translator.ConvertRequest(to, "upstream", translator.FormatMessages, input, state); err != nil {
+				t.Fatalf("%s/%s: %v", to, policy, err)
+			}
+			if ds := state.Diagnostics(); len(ds) != 0 {
+				t.Fatalf("%s/%s: %v", to, policy, ds)
+			}
+		}
 	}
 }
