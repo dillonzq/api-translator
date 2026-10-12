@@ -702,6 +702,19 @@ func (e ResponsesEventEmitter) ItemAdded(outputIndex int, item map[string]any) [
 	if item["type"] == "function_call" {
 		if name, ok := item["name"].(string); ok {
 			id := e.Tools.Identity(name)
+			if id.isShell {
+				if itemID, _ := item["id"].(string); itemID == "" {
+					callID, _ := item["call_id"].(string)
+					item["id"] = ShellItemID(callID)
+				}
+				item["type"] = "shell_call"
+				item["action"] = shellResponseAction(json.RawMessage(`{"commands":[]}`))
+				item["environment"] = json.RawMessage(shellEnvironment)
+				item["status"] = "in_progress"
+				delete(item, "name")
+				delete(item, "arguments")
+				return SSEEvent("response.output_item.added", map[string]any{"type": "response.output_item.added", "output_index": outputIndex, "item": item})
+			}
 			if id.isCustom {
 				item["type"] = "custom_tool_call"
 				item["input"] = ""
@@ -1139,18 +1152,21 @@ func (r *ResponsesRequest) DecodeInputItems() ([]RespItem, *errclass.Error) {
 // response.output_item.added announcement used); function_call items stay
 // call_id-only per the documented canonical shape.
 type RespItem struct {
-	Type      string             `json:"type"`
-	ID        string             `json:"id,omitempty"`
-	Role      string             `json:"role,omitempty"`
-	Content   json.RawMessage    `json:"content,omitempty"`
-	CallID    string             `json:"call_id,omitempty"`
-	Name      string             `json:"name,omitempty"`
-	Namespace string             `json:"namespace,omitempty"`
-	Arguments string             `json:"arguments,omitempty"`
-	Input     string             `json:"input,omitempty"`
-	Output    json.RawMessage    `json:"output,omitempty"`
-	Summary   []ReasoningSummary `json:"summary,omitempty"`
-	Tools     []RespTool         `json:"tools,omitempty"`
+	Type        string             `json:"type"`
+	ID          string             `json:"id,omitempty"`
+	Role        string             `json:"role,omitempty"`
+	Content     json.RawMessage    `json:"content,omitempty"`
+	CallID      string             `json:"call_id,omitempty"`
+	Name        string             `json:"name,omitempty"`
+	Namespace   string             `json:"namespace,omitempty"`
+	Arguments   string             `json:"arguments,omitempty"`
+	Input       string             `json:"input,omitempty"`
+	Output      json.RawMessage    `json:"output,omitempty"`
+	Summary     []ReasoningSummary `json:"summary,omitempty"`
+	Tools       []RespTool         `json:"tools,omitempty"`
+	Action      json.RawMessage    `json:"action,omitempty"`
+	Status      string             `json:"status,omitempty"`
+	Environment json.RawMessage    `json:"environment,omitempty"`
 }
 
 // CCFunction is one Chat Completions tool function definition (decode and
@@ -1711,6 +1727,13 @@ func (a *OutputAssembler) AddText(fragment string) {
 // as custom_tool_call items with unwrapped input.
 func (a *OutputAssembler) AppendFunctionCall(callID, name, args string) {
 	id := a.tools.Identity(name)
+	if id.isShell {
+		action, err := ShellAction(args)
+		if err == nil {
+			a.items = append(a.items, RespItem{Type: "shell_call", ID: ShellItemID(callID), CallID: callID, Action: shellResponseAction(action), Environment: json.RawMessage(shellEnvironment), Status: "completed"})
+			return
+		}
+	}
 	if id.isCustom {
 		a.items = append(a.items, RespItem{
 			Type: "custom_tool_call", CallID: callID, Name: id.name, Namespace: id.namespace, Input: UnwrapCustomToolInput(args),

@@ -25,7 +25,7 @@ Go module: `github.com/dillonzq/api-translator`; package: `translator`.
 
 ## Supported protocols
 
-All six cross-protocol directions are supported, along with same-protocol request model rewriting and response passthrough. Conversion covers text, image/file/audio/video input, function tools, reasoning, usage, structured output, and representable URL citations. See [protocol conversion](docs/protocol-conversion.md) for media input directions and limits, tool identity restoration, hosted search, and streaming limits.
+All six cross-protocol directions are supported, along with same-protocol request model rewriting and response passthrough. Conversion covers text, image/file/audio/video input, function/custom tools, local shell adaptation, reasoning, usage, structured output, and representable URL citations. See [protocol conversion](docs/protocol-conversion.md) for media input directions and limits, tool identity restoration, hosted search, and streaming limits.
 
 | Constant | Format value | Protocol |
 | --- | --- | --- |
@@ -40,6 +40,8 @@ Callers map external format identifiers to these constants. Only the three value
 ```sh
 go get github.com/dillonzq/api-translator@v0.2.0
 ```
+
+These documents describe the current source. File/audio/video input conversion and local shell adaptation are not included in `v0.2.0`; use a source build until they are released.
 
 ## Quick start
 
@@ -79,7 +81,7 @@ outputBody, err := translator.ConvertResponse(
 
 `sourceFormat` describes the input request, `upstreamFormat` describes the upstream response, and `outputFormat` describes the response the client needs. The output protocol may differ from the input request protocol. Callers choose and supply the upstream model name.
 
-Use a separate `RequestState` for each request. Its zero value is usable. Responses requests converted to another protocol require state to restore tool names, namespaces, and custom identities. Other cases without mappings or diagnostics may use `nil`. Do not reuse or mutate state concurrently across requests; call each converter sequentially.
+Use a separate `RequestState` for each request. Its zero value is usable. Responses requests converted to another protocol require state to restore tool names, namespaces, custom identities, and local shell calls. Other cases without mappings or diagnostics may use `nil`. Do not reuse or mutate state concurrently across requests; call each converter sequentially.
 
 ### Native Responses tool normalization
 
@@ -92,9 +94,9 @@ body, err := translator.NormalizeResponsesRequest(payload, state)
 // Pass the same state to response or stream conversion.
 ```
 
-This merges `additional_tools`, flattens namespaces, wraps custom tools and historical calls, rewrites `tool_choice` (including `allowed_tools`), and registers identities for response restoration. Unknown fields, exact JSON numbers, tool-result images, and top-level hosted tools are preserved; callers check upstream hosted-tool support. Nested namespaces and hosted tools inside namespaces fail. Custom `format` constraints cannot be retained as function tools: they produce a semantic loss diagnostic, rejected by Safe/Strict policies. Failed normalization does not commit new identity mappings. Same-protocol `ConvertRequest` still only rewrites the model.
+This merges `additional_tools`, flattens namespaces, wraps custom tools and historical calls, adapts local shell declarations and history to a `shell` function, rewrites `tool_choice` (including `allowed_tools`), and registers identities for response restoration. Unknown fields, exact JSON numbers, tool-result images, and top-level hosted tools are preserved; callers check upstream hosted-tool support. Nested namespaces and hosted tools inside namespaces fail. Custom `format` constraints cannot be retained as function tools: they produce a semantic loss diagnostic, rejected by Safe/Strict policies. Failed normalization does not commit new identity mappings. Same-protocol `ConvertRequest` still only rewrites the model.
 
-These APIs are available starting with `v0.2.0`.
+`NormalizeResponsesRequest` and `SSEDecoder` are available starting with `v0.2.0`. The local shell support described here is unreleased; see [local shell adaptation](docs/protocol-conversion.md#local-shell-adaptation) for its direction and limits.
 
 Repeated declarations of the same tool identity keep the first declaration. References in history and `tool_choice` must use original names and namespaces; conflicting identities that flatten to the same wire name are rejected.
 

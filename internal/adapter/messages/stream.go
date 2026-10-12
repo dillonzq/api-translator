@@ -409,6 +409,15 @@ func (sc *StreamConverter) dispatchResponses(etype string, ev *sseEvent, events 
 				sc.respTools.Report("messages", "responses", "content.web_search_tool_result", true)
 			}
 		case "tool_use":
+			if sc.respTools.IsShell(bs.name) && shared.HasContent(ev.ContentBlock.Input) {
+				var input map[string]json.RawMessage
+				if json.Unmarshal(ev.ContentBlock.Input, &input) != nil {
+					return false, errclass.Translation("shell tool input must be an object")
+				}
+				if len(input) > 0 {
+					bs.args.Write(ev.ContentBlock.Input)
+				}
+			}
 			sc.toolsSeen = true
 			bs.outIdx = sc.outCount
 			sc.outCount++
@@ -448,7 +457,9 @@ func (sc *StreamConverter) dispatchResponses(etype string, ev *sseEvent, events 
 				return false, errclass.Translation("tool arguments fragment without a tool_use block start")
 			}
 			bs.args.WriteString(ev.Delta.PartialJSON)
-			if sc.respTools.IsCustom(bs.name) {
+			if sc.respTools.IsShell(bs.name) {
+				// Buffer JSON until a complete shell action is available.
+			} else if sc.respTools.IsCustom(bs.name) {
 				// Same wrapped-JSON accumulation as the Chat
 				// Completions route: raw fragments never reach the
 				// client, only newly-unwrapped input tails.
@@ -488,6 +499,9 @@ func (sc *StreamConverter) dispatchResponses(etype string, ev *sseEvent, events 
 			sc.stopReason = ev.Delta.StopReason
 		}
 	case "message_stop":
+		if err := sc.validateShellTools(); err != nil {
+			return false, err
+		}
 		*events = append(*events, sc.responsesCompleted()...)
 		return true, nil
 	case "error":
@@ -537,6 +551,8 @@ func (sc *StreamConverter) responsesCompleted() [][]byte {
 			out = append(out, em.ArgsDone(v.CallID, idx, v.Name, v.Arguments), em.ItemDone(idx, v))
 		case "custom_tool_call":
 			out = append(out, em.InputDone(v.CallID, idx, v.Input), em.ItemDone(idx, v))
+		case "shell_call":
+			out = append(out, em.ItemDone(idx, v))
 		}
 	}
 	return append(out, em.Completed(status, usage, items))
@@ -606,7 +622,26 @@ func (sc *StreamConverter) Finish() ([][]byte, *errclass.Error) {
 	if sc.stopReason == "" {
 		return nil, errclass.Translation("Messages stream ended before a terminal state")
 	}
+	if sc.sourceFormat == "responses" {
+		if err := sc.validateShellTools(); err != nil {
+			return nil, err
+		}
+	}
 	return append(events, sc.Flush()...), nil
+}
+
+func (sc *StreamConverter) validateShellTools() *errclass.Error {
+	for _, block := range sc.blocks {
+		if sc.respTools.IsShell(block.name) {
+			if block.id == "" {
+				return errclass.Translation("shell tool has no call identity")
+			}
+			if _, err := shared.ShellAction(block.args.String()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // outputItems materializes the Responses output array from observed

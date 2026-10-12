@@ -25,7 +25,7 @@ Go module：`github.com/dillonzq/api-translator`，包名：`translator`。
 
 ## 支持范围
 
-三种协议支持全部六个跨协议方向，也支持同协议请求的模型改写及响应透传。转换覆盖文本、图片、文件、音频和视频输入、函数工具、推理、usage、结构化输出和可表示的 URL 引用；媒体输入的方向与限制、工具身份恢复、托管搜索和流式限制见[协议转换说明](docs/protocol-conversion.zh-CN.md)。
+三种协议支持全部六个跨协议方向，也支持同协议请求的模型改写及响应透传。转换覆盖文本、图片、文件、音频和视频输入、函数/custom 工具、本地 shell 适配、推理、usage、结构化输出和可表示的 URL 引用；媒体输入的方向与限制、工具身份恢复、托管搜索和流式限制见[协议转换说明](docs/protocol-conversion.zh-CN.md)。
 
 | 常量 | 格式值 | 协议 |
 | --- | --- | --- |
@@ -40,6 +40,8 @@ Go module：`github.com/dillonzq/api-translator`，包名：`translator`。
 ```sh
 go get github.com/dillonzq/api-translator@v0.2.0
 ```
+
+文档描述当前源码。文件、音频、视频输入转换及本地 shell 适配尚未包含在 `v0.2.0` 中；发布前需使用源码构建。
 
 ## 快速开始
 
@@ -79,7 +81,7 @@ outputBody, err := translator.ConvertResponse(
 
 `sourceFormat` 是输入请求的协议，`upstreamFormat` 是上游响应的协议，`outputFormat` 是客户端需要的响应协议；输出协议可以与请求输入协议不同。上游模型名由调用方选择并传入。
 
-每次请求使用独立的 `RequestState`。其零值可用；Responses 请求转换到其他协议时必须传入状态，用于恢复工具名称、namespace 和 custom 身份。其他无映射、无诊断需求的场景允许 `nil`。不要跨请求复用或并发修改状态，同一转换器也应顺序调用。
+每次请求使用独立的 `RequestState`。其零值可用；Responses 请求转换到其他协议时必须传入状态，用于恢复工具名称、namespace、custom 身份及本地 shell 调用。其他无映射、无诊断需求的场景允许 `nil`。不要跨请求复用或并发修改状态，同一转换器也应顺序调用。
 
 ### 原生 Responses 工具规范化
 
@@ -92,9 +94,9 @@ body, err := translator.NormalizeResponsesRequest(payload, state)
 // 普通响应或流式响应转换继续传入同一份 state。
 ```
 
-该入口合并 `additional_tools`，展开 namespace 工具，包装 custom 工具及历史调用，改写 `tool_choice`（包括 `allowed_tools`），并登记响应恢复所需的身份。未知字段、精确 JSON 数值、工具结果图片及顶层托管工具保留；调用方负责判断上游是否支持托管工具。嵌套 namespace 和 namespace 内的托管工具会报错。custom 的 `format` 约束无法在函数工具中保留，会记录语义损耗；Safe/Strict 策略拒绝此损耗。失败不会提交新的工具身份映射。原有同协议 `ConvertRequest` 仍仅改写模型。
+该入口合并 `additional_tools`，展开 namespace 工具，包装 custom 工具及历史调用，将本地 shell 声明和历史记录适配为 `shell` 函数，改写 `tool_choice`（包括 `allowed_tools`），并登记响应恢复所需的身份。未知字段、精确 JSON 数值、工具结果图片及顶层托管工具保留；调用方负责判断上游是否支持托管工具。嵌套 namespace 和 namespace 内的托管工具会报错。custom 的 `format` 约束无法在函数工具中保留，会记录语义损耗；Safe/Strict 策略拒绝此损耗。失败不会提交新的工具身份映射。原有同协议 `ConvertRequest` 仍仅改写模型。
 
-这些接口从 `v0.2.0` 起可用。
+`NormalizeResponsesRequest` 与 `SSEDecoder` 从 `v0.2.0` 起可用。本文的本地 shell 支持尚未发布；适配方向与限制见[本地 shell 适配](docs/protocol-conversion.zh-CN.md#本地-shell-适配)。
 
 同一工具身份的重复声明保留首次声明。历史调用和 `tool_choice` 中的引用应使用原始名称及 namespace；不同身份展开后名称冲突时会报错。
 

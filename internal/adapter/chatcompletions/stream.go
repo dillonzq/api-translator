@@ -606,7 +606,9 @@ func (sc *StreamConverter) responsesLine(line string) ([][]byte, *errclass.Error
 			t.announced = true
 			events = append(events, sc.responsesEm().ItemAdded(t.blockIndex, map[string]any{"type": "function_call", "call_id": t.id, "name": t.name, "arguments": ""}))
 		}
-		if sc.respTools.IsCustom(t.name) {
+		if sc.respTools.IsShell(t.name) {
+			// Shell actions are emitted as a complete output item.
+		} else if sc.respTools.IsCustom(t.name) {
 			if tail := shared.CustomInputTail(t.args.String(), &t.customEmitted); tail != "" {
 				events = append(events, sc.responsesEm().InputDelta(t.id, t.blockIndex, tail))
 			}
@@ -714,6 +716,8 @@ func (sc *StreamConverter) responsesTerminal() [][]byte {
 		case "custom_tool_call":
 			events = append(events, em.InputDone(v.CallID, idx, v.Input))
 			events = append(events, em.ItemDone(idx, v))
+		case "shell_call":
+			events = append(events, em.ItemDone(idx, v))
 		}
 	}
 	return append(events, em.Completed(status, usage, items))
@@ -732,6 +736,11 @@ func (sc *StreamConverter) validateTools() *errclass.Error {
 	for _, tool := range sc.tools {
 		if tool.id == "" || tool.name == "" {
 			return errclass.Translation("Chat Completions tool ended without an id or name")
+		}
+		if sc.respTools.IsShell(tool.name) {
+			if _, err := shared.ShellAction(tool.args.String()); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -4,8 +4,8 @@ import "github.com/dillonzq/api-translator/internal/adapter/shared"
 
 // NormalizeResponsesRequest explicitly adapts a native Responses request for
 // an upstream that requires function tools. It flattens namespaces, wraps
-// custom inputs, merges additional_tools, and records identities for response
-// restoration. Hosted tools and unrelated fields are preserved; callers own
+// custom inputs, adapts local shell calls, merges additional_tools, and records
+// identities for response restoration. Hosted tools and unrelated fields are preserved; callers own
 // upstream capability checks and model rewriting. State is required and must
 // also be passed to ConvertResponse or NewStreamConverter.
 // Repeated declarations of the same identity keep the first declaration.

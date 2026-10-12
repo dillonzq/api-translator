@@ -16,6 +16,33 @@ func RestoreToolItem(raw json.RawMessage, tools *ResponseTools) (json.RawMessage
 		return raw, false
 	}
 	id := tools.Identity(name)
+	if id.isShell && typ == "function_call" {
+		if rawString(item, "id") == "" {
+			putString(item, "id", ShellItemID(rawString(item, "call_id")))
+		}
+		var args string
+		json.Unmarshal(item["arguments"], &args)
+		// Added events announce an empty action before arguments arrive.
+		action := json.RawMessage(`{"commands":[]}`)
+		if args != "" {
+			validated, actionErr := ShellAction(args)
+			if actionErr != nil {
+				return raw, false
+			}
+			action = validated
+		}
+		item["type"] = json.RawMessage(`"shell_call"`)
+		item["action"] = shellResponseAction(action)
+		item["environment"] = json.RawMessage(shellEnvironment)
+		if rawString(item, "status") == "" {
+			putString(item, "status", "completed")
+		}
+		delete(item, "name")
+		delete(item, "arguments")
+		delete(item, "namespace")
+		out, _ := json.Marshal(item)
+		return out, true
+	}
 	changed := id.name != name || id.namespace != "" || id.isCustom
 	if !changed {
 		return raw, false

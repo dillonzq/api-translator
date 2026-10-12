@@ -41,6 +41,22 @@ Responses 的 `additional_tools` 合并到工具声明；namespace 展平为函�
 
 Custom 工具（包括 `apply_patch`）可转换为使用字符串 `input` 的函数工具；缺省 schema 包含必需的 `input`。Responses 输出恢复 custom 调用，涵盖 item、input delta/done 和终止快照。custom grammar 等无法映射的约束会报告损耗。
 
+### 本地 shell 适配
+
+此适配将 Responses 客户端的本地 shell 转成 Chat Completions 或 Messages 上游的函数工具；Responses 上游需显式调用 `NormalizeResponsesRequest`。向 Responses 客户端返回响应时，继续传入同一份 `RequestState`。
+
+本地 `shell` 声明（省略 environment 或指定 `type: "local"`，包括 `{"type":"local","skills":[]}`）转成名为 `shell` 的函数。参数包含必需且非空的 `commands` 数组，以及可选、可为 null 的 `timeout_ms` 和 `max_output_length` 限制。支持空的本地 `skills` 数组；非空 skills 和其他无法表示的本地配置会明确报错。本地 shell 工具不能放在 namespace 中，也不能与名为 `shell` 的普通函数/custom 工具同时声明。
+
+历史 `shell_call` 转成函数调用。`shell_call_output` 转成 JSON 文本，保留输出顺序、stdout、stderr、退出码和超时结果。若存在 `max_output_length`，文本包含带 `output` 和 `max_output_length` 的对象；否则包含输出数组。Responses 跨协议请求仅在整个转换成功后提交工具身份，失败时仍保留诊断信息。
+
+恢复的调用包含稳定的 item `id`、独立的 `call_id`、`environment: {"type":"local"}` 和 status。已有的原生 item ID 和 status 会保留；缺省 status 在 added 事件中补为 `in_progress`，在完成的 item 中补为 `completed`。action 中省略的执行限制均补为 `null`。
+
+流式输出先宣布 shell item，再在 `response.output_item.done` 和终止快照中返回完整 action，保持相同的 item ID。shell 函数参数的 delta/done 事件被抑制。先处理协议级上游失败，再校验参数，保留上游错误分类及可重试性；成功响应中的无效或不完整参数会报错。
+
+本库不执行命令。托管 shell 环境由原生 Responses 路径保留，跨协议转换不支持；旧版 `local_shell` 不在此映射范围内。实际的原生 `shell_call` 输出不会映射给 Chat Completions 或 Messages 客户端。显式规范化及原生 Responses 恢复保留精确 JSON 数值；既有跨协议路径若将参数解码为浮点数（包括 Messages 请求历史），可能舍入大整数。
+
+### 托管搜索
+
 | 搜索路径 | 支持范围 |
 | --- | --- |
 | Responses ↔ Messages | 可表示的 web search 声明、查询、位置、允许域名、URL 来源和完成信息 |
@@ -70,7 +86,7 @@ Responses 的流式转换接收 `response.reasoning_summary_text.delta/done` 与
 
 跨协议仍不传递 Anthropic `signature` / `signature_delta` / `redacted_thinking.data`，以及 Responses `encrypted_content`。这些是供应商专属的签名或不透明数据，没有可靠的跨协议映射；不会伪造签名，也不会当成可读推理。转换出的无签名 thinking 适合展示，不保证可直接回放到要求有效签名的 Anthropic 请求。
 
-相同协议的响应通常原样透传，保留这些字段；Responses 的自定义工具恢复和流式错误/终止处理是例外。
+相同协议的响应通常原样透传，保留这些字段；Responses 的工具身份恢复和流式错误/终止处理是例外。
 
 ## 推理控制与后缀
 
@@ -184,4 +200,4 @@ logprobs、供应商扩展、历史 compaction 和签名不保证跨协议保留
 
 根包提供公开入口、请求策略和传输边界；各协议 adapter 的 `request.go`、`convert.go`、`stream.go` 负责转换。工具规范化、schema、引用、搜索和诊断的共享逻辑位于 `internal/adapter/shared`，推理控制与后缀位于 `thinking`。
 
-测试覆盖 27 份请求/响应/流式快照、交错工具、晚到身份、引用分片、搜索失败及终止一致性。fuzz 验证网络分块一致性和失败状态不可恢复；这些测试不替代真实上游的兼容验证。命令见 README。
+测试覆盖 27 份请求/响应/流式快照、交错工具、晚到身份、引用分片、搜索失败、终止一致性及本地 shell 恢复/错误路径。fuzz 验证网络分块一致性和失败状态不可恢复；这些测试不替代真实上游的兼容验证。命令见 README。

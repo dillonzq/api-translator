@@ -32,6 +32,7 @@ type StreamConverter struct {
 	customItems map[string]struct{}
 	customArgs  map[string]*strings.Builder
 	customSent  map[string]int
+	shellItems  map[string]bool
 
 	// Response identity captured from response.created.
 	id      string
@@ -82,6 +83,7 @@ func NewStreamConverter(sourceFormat string, tools ...*shared.ResponseTools) *St
 		respTools:   shared.ResponseToolContext(tools),
 		customItems: map[string]struct{}{},
 		customArgs:  map[string]*strings.Builder{}, customSent: map[string]int{},
+		shellItems: map[string]bool{},
 	}
 	alloc := sc.allocIndex
 	if sourceFormat == "messages" {
@@ -628,6 +630,9 @@ func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byt
 		var doc map[string]json.RawMessage
 		if json.Unmarshal([]byte(payload), &doc) == nil {
 			if response, ok := doc["response"]; ok {
+				if err := shared.ValidateShellResponse(response, "responses", sc.respTools); err != nil {
+					return nil, false, err
+				}
 				restored := shared.RestoreResponseTools(response, sc.respTools)
 				if string(restored) != string(response) {
 					doc["response"] = restored
@@ -641,6 +646,18 @@ func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byt
 		json.Unmarshal([]byte(payload), &ev)
 		return nil, false, failureError(&ev)
 	case "response.output_item.added", "response.output_item.done":
+		var shellEvent struct {
+			Item struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"item"`
+		}
+		json.Unmarshal([]byte(payload), &shellEvent)
+		if eventType == "response.output_item.done" && sc.respTools.IsShell(shellEvent.Item.Name) {
+			if _, err := shared.ShellAction(shellEvent.Item.Arguments); err != nil {
+				return nil, false, err
+			}
+		}
 		if sc.respTools != nil {
 			if rewritten, ok := sc.restoreCustomItem(eventType, payload); ok {
 				return [][]byte{rewritten}, false, nil
@@ -654,6 +671,11 @@ func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byt
 		var ev argsDeltaEvent
 		if err := decodeEvent(eventType, payload, &ev); err != nil {
 			return nil, false, err
+		}
+		if sc.shellItems[ev.ItemID] || sc.respTools.IsShell(ev.Name) {
+			sc.shellItems[ev.ItemID] = true
+			sc.customArguments(ev.ItemID, ev.Delta)
+			return nil, false, nil
 		}
 		if ev.ItemID != "" && sc.respTools.IsCustom(ev.Name) {
 			sc.customItems[ev.ItemID] = struct{}{}
@@ -677,6 +699,21 @@ func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byt
 		}
 		return [][]byte{raw}, false, nil
 	case "response.function_call_arguments.done":
+		var shellArgs argsDeltaEvent
+		json.Unmarshal([]byte(payload), &shellArgs)
+		if sc.shellItems[shellArgs.ItemID] || sc.respTools.IsShell(shellArgs.Name) {
+			if err := decodeEvent(eventType, payload, &shellArgs); err != nil {
+				return nil, false, err
+			}
+			args := shellArgs.Arguments
+			if args == "" {
+				args = sc.customArguments(shellArgs.ItemID, "")
+			}
+			if _, err := shared.ShellAction(args); err != nil {
+				return nil, false, err
+			}
+			return nil, false, nil
+		}
 		if sc.respTools != nil {
 			if rewritten, ok := sc.restoreCustomInputDone(payload); ok {
 				return [][]byte{rewritten}, false, nil
@@ -708,6 +745,23 @@ func (sc *StreamConverter) restoreCustomItem(eventType, payload string) ([]byte,
 		Name   string `json:"name"`
 	}
 	json.Unmarshal(doc["item"], &original)
+	if sc.respTools.IsShell(original.Name) {
+		if original.ID != "" {
+			sc.shellItems[original.ID] = true
+		}
+		if original.CallID != "" {
+			sc.shellItems[original.CallID] = true
+		}
+		if eventType == "response.output_item.added" {
+			var item map[string]json.RawMessage
+			json.Unmarshal(doc["item"], &item)
+			item["arguments"] = json.RawMessage(`""`)
+			if !shared.HasContent(item["status"]) {
+				item["status"] = json.RawMessage(`"in_progress"`)
+			}
+			doc["item"], _ = json.Marshal(item)
+		}
+	}
 	restored, ok := shared.RestoreToolItem(doc["item"], sc.respTools)
 	if !ok {
 		return nil, false
