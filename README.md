@@ -171,7 +171,7 @@ Structured output, tools, citations, search, termination rules, and remaining li
 
 ## Development and validation
 
-See [code structure and maintenance](docs/architecture.md) for module responsibilities and state contracts.
+See [code structure and maintenance](docs/architecture.md) for module responsibilities and state contracts, and [CONTRIBUTING.md](CONTRIBUTING.md) for the check list, design rules, commit conventions, and release process.
 
 ```sh
 go test -race ./...

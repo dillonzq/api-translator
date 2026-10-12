@@ -11,8 +11,8 @@ func RestoreToolItem(raw json.RawMessage, tools *ConversionContext, shellItemIDs
 		return raw, false
 	}
 	var typ, name string
-	json.Unmarshal(item["type"], &typ)
-	json.Unmarshal(item["name"], &name)
+	DecodeProbe(item["type"], &typ)
+	DecodeProbe(item["name"], &name)
 	if typ != "function_call" && typ != "custom_tool_call" {
 		return raw, false
 	}
@@ -31,8 +31,12 @@ func RestoreToolItem(raw json.RawMessage, tools *ConversionContext, shellItemIDs
 			itemID = ShellItemID(callID)
 		}
 		putString(item, "id", itemID)
-		var args string
-		json.Unmarshal(item["arguments"], &args)
+		args, argsOK := StringField(item["arguments"])
+		if !argsOK {
+			// A non-string arguments value cannot be validated as a shell
+			// action; rewriting it would emit an empty action instead.
+			return raw, false
+		}
 		// Added events announce an empty action before arguments arrive.
 		action := json.RawMessage(`{"commands":[]}`)
 		if args != "" {
@@ -66,8 +70,13 @@ func RestoreToolItem(raw json.RawMessage, tools *ConversionContext, shellItemIDs
 		item["namespace"], _ = json.Marshal(id.namespace)
 	}
 	if id.isCustom && typ == "function_call" {
-		var args string
-		json.Unmarshal(item["arguments"], &args)
+		args, argsOK := StringField(item["arguments"])
+		if !argsOK {
+			// The upstream value is not the string this shape requires.
+			// Converting it would drop the original bytes and emit an empty
+			// custom input, so leave the item untouched.
+			return raw, false
+		}
 		item["type"] = json.RawMessage(`"custom_tool_call"`)
 		item["input"], _ = json.Marshal(UnwrapCustomToolInput(args))
 		delete(item, "arguments")
@@ -114,7 +123,7 @@ func RestoreToolEventIdentity(payload []byte, tools *ConversionContext) (map[str
 		return nil, false
 	}
 	var name string
-	json.Unmarshal(doc["name"], &name)
+	DecodeProbe(doc["name"], &name)
 	if name == "" {
 		return doc, false
 	}

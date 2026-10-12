@@ -213,7 +213,7 @@ func DecodeStringOrParts(raw json.RawMessage, targetLabel string) ([]ContentPart
 		return nil, errclass.Translation("malformed message content: " + err.Error())
 	}
 	var elems []json.RawMessage
-	json.Unmarshal(raw, &elems)
+	DecodeProbe(raw, &elems)
 	var out []ContentPart
 	for i, p := range parts {
 		if !IsContentPartType(p.Type) {
@@ -295,7 +295,7 @@ func OpenAIImageURL(raw json.RawMessage) (string, *errclass.Error) {
 		if json.Unmarshal(raw, &obj) == nil && obj.URL != "" {
 			return obj.URL, nil
 		}
-		json.Unmarshal(raw, &url)
+		DecodeProbe(raw, &url)
 	}
 	if url == "" {
 		return "", errclass.Translation("image content part missing url")

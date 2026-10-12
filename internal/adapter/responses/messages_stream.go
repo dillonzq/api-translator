@@ -179,7 +179,10 @@ type messagesSearch struct {
 }
 
 func (sc *StreamConverter) searchItem(item functionCallItem, complete bool) ([][]byte, bool, *errclass.Error) {
-	search, ok := shared.SearchFromResponse(item.Raw)
+	search, ok, err := shared.SearchFromResponse(item.Raw)
+	if err != nil {
+		return nil, false, err
+	}
 	if !ok {
 		sc.context.Report("responses", sc.outputFormat, "output.web_search_call.action", true)
 		return nil, false, nil

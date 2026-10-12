@@ -202,7 +202,7 @@ func normalizeShellDocument(doc rawObject, state *ConversionContext) (bool, *err
 			}
 			if rawString(tool, "type") == "namespace" {
 				var children []rawObject
-				json.Unmarshal(tool["tools"], &children)
+				DecodeProbe(tool["tools"], &children)
 				inspect(children)
 			}
 		}
@@ -219,7 +219,7 @@ func normalizeShellDocument(doc rawObject, state *ConversionContext) (bool, *err
 			}
 		case "additional_tools":
 			var extra []rawObject
-			json.Unmarshal(item["tools"], &extra)
+			DecodeProbe(item["tools"], &extra)
 			inspect(extra)
 		}
 	}
@@ -243,15 +243,14 @@ func normalizeShellDocument(doc rawObject, state *ConversionContext) (bool, *err
 	if prev, ok := state.Tools.names[ShellFunctionName]; ok && prev != id {
 		return false, errclass.Translation("shell function name collides with another tool")
 	}
-	var rewriteTools func([]rawObject) *errclass.Error
-	rewriteTools = func(ts []rawObject) *errclass.Error {
+	rewriteTools := func(ts []rawObject) *errclass.Error {
 		for _, tool := range ts {
 			if (rawString(tool, "type") == "function" || rawString(tool, "type") == "custom") && rawString(tool, "name") == ShellFunctionName {
 				return errclass.Translation("shell function name collides with another tool")
 			}
 			if rawString(tool, "type") == "namespace" {
 				var children []rawObject
-				json.Unmarshal(tool["tools"], &children)
+				DecodeProbe(tool["tools"], &children)
 				for _, child := range children {
 					if localShell(child) {
 						return errclass.Translation("shell tools cannot be namespaced")
@@ -280,7 +279,7 @@ func normalizeShellDocument(doc rawObject, state *ConversionContext) (bool, *err
 		typ := rawString(item, "type")
 		if typ == "additional_tools" {
 			var extra []rawObject
-			json.Unmarshal(item["tools"], &extra)
+			DecodeProbe(item["tools"], &extra)
 			if err := rewriteTools(extra); err != nil {
 				return false, err
 			}
@@ -351,22 +350,22 @@ func NormalizeShellRequest(body []byte, state *ConversionContext) ([]byte, *errc
 func ValidateShellResponse(body []byte, format string, state *ConversionContext) *errclass.Error {
 	var doc rawObject
 	if json.Unmarshal(body, &doc) != nil {
-		return nil
+		return nil //nolint:nilerr // an undecodable body has no shell calls to validate
 	}
 	var calls []rawObject
 	switch format {
 	case FormatResponses:
-		json.Unmarshal(doc["output"], &calls)
+		DecodeProbe(doc["output"], &calls)
 	case FormatMessages:
-		json.Unmarshal(doc["content"], &calls)
+		DecodeProbe(doc["content"], &calls)
 	case FormatChatCompletions:
 		var choices []rawObject
-		json.Unmarshal(doc["choices"], &choices)
+		DecodeProbe(doc["choices"], &choices)
 		for _, choice := range choices {
 			var message rawObject
-			json.Unmarshal(choice["message"], &message)
+			DecodeProbe(choice["message"], &message)
 			var tools []rawObject
-			json.Unmarshal(message["tool_calls"], &tools)
+			DecodeProbe(message["tool_calls"], &tools)
 			calls = append(calls, tools...)
 		}
 	}
@@ -381,7 +380,7 @@ func ValidateShellResponse(body []byte, format string, state *ConversionContext)
 		if format == FormatChatCompletions {
 			callID = rawString(call, "id")
 			var fn rawObject
-			json.Unmarshal(call["function"], &fn)
+			DecodeProbe(call["function"], &fn)
 			name = rawString(fn, "name")
 			args = rawString(fn, "arguments")
 		}

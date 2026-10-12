@@ -1,7 +1,5 @@
 package shared
 
-import "encoding/json"
-
 // FinishWithRefusal preserves truncation/tool signals while classifying a
 // normally completed refusal as content_filter.
 func FinishWithRefusal(finish string, refused bool) string {
@@ -34,7 +32,7 @@ func (e ResponsesEventEmitter) MessageDone(item RespItem, index int) [][]byte {
 		Refusal     string           `json:"refusal"`
 		Annotations []map[string]any `json:"annotations"`
 	}
-	json.Unmarshal(item.Content, &parts)
+	DecodeProbe(item.Content, &parts)
 	var events [][]byte
 	for i, part := range parts {
 		content := map[string]any{"type": part.Type}

@@ -171,7 +171,7 @@ diagnostics := state.Diagnostics()
 
 ## 开发与验证
 
-模块职责、状态与维护约定见[代码结构说明](docs/architecture.zh-CN.md)。
+模块职责、状态与维护约定见[代码结构说明](docs/architecture.zh-CN.md)；检查清单、设计规则、提交约定与发布流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ```sh
 go test -race ./...

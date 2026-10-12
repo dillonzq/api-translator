@@ -300,7 +300,11 @@ func responsesToClaude(body []byte, tools ...*shared.ConversionContext) ([]byte,
 				}
 			}
 		case "web_search_call":
-			if search, ok := shared.SearchFromResponse(item.Raw); ok {
+			search, ok, err := shared.SearchFromResponse(item.Raw)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
 				blocks = append(blocks, search.MessageBlocks()...)
 			} else {
 				ctx.Report("responses", "messages", "output.web_search_call.action", true)

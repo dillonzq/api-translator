@@ -61,7 +61,7 @@ func readOutputFormat(from string, source map[string]json.RawMessage) (map[strin
 		return nil, errclass.Translation("output format must be an object")
 	}
 	var typ string
-	json.Unmarshal(format["type"], &typ)
+	DecodeProbe(format["type"], &typ)
 	if typ != "text" && typ != "json_object" && typ != "json_schema" {
 		return nil, &errclass.Error{Class: errclass.ClassUnsupported, Message: "unsupported structured output format"}
 	}
@@ -86,7 +86,7 @@ func readOutputFormat(from string, source map[string]json.RawMessage) (map[strin
 }
 func writeOutputFormat(to string, format map[string]json.RawMessage, target map[string]json.RawMessage, state *ConversionContext, from string) *errclass.Error {
 	var typ string
-	json.Unmarshal(format["type"], &typ)
+	DecodeProbe(format["type"], &typ)
 	if typ == "text" {
 		return nil
 	}

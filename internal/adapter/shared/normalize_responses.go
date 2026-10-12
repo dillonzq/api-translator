@@ -12,7 +12,7 @@ type rawObject map[string]json.RawMessage
 
 func rawString(obj rawObject, key string) string {
 	var value string
-	json.Unmarshal(obj[key], &value)
+	DecodeProbe(obj[key], &value)
 	return value
 }
 

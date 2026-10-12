@@ -136,7 +136,7 @@ func chatToClaude(body []byte, tools ...*shared.ConversionContext) ([]byte, *err
 	stop := shared.TerminalReason(len(choice.Message.ToolCalls) > 0,
 		"tool_use", shared.FinishToClaudeStop(shared.FinishWithRefusal(choice.FinishReason, choice.Message.Refusal != "")))
 	var text string
-	json.Unmarshal(choice.Message.Content, &text)
+	shared.DecodeProbe(choice.Message.Content, &text)
 	shared.AddBlockCitations(blocks, shared.DecodeCitations(choice.Message.Annotations, "chat-completions", "messages", "choices[0].message.annotations", text, 0, shared.ContextOrNew(tools)))
 	b, _ := json.Marshal(shared.NewClaudeResult(resp.ID, resp.Model, stop,
 		shared.ClampSubtract(inputTokens, cacheRead, cacheWrite), outputTokens, cacheRead, cacheWrite, append(blocks, toolUse...)))
@@ -223,7 +223,7 @@ func chatToResponses(body []byte, tools ...*shared.ConversionContext) ([]byte, *
 		oa.AddText(b["text"].(string))
 	}
 	var text string
-	json.Unmarshal(choice.Message.Content, &text)
+	shared.DecodeProbe(choice.Message.Content, &text)
 	oa.AddCitations(shared.DecodeCitations(choice.Message.Annotations, "chat-completions", "responses", "choices[0].message.annotations", text, 0, shared.ContextOrNew(tools)))
 	oa.AddRefusal(choice.Message.Refusal)
 	for _, tc := range choice.Message.ToolCalls {

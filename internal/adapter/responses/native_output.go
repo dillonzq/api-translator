@@ -48,7 +48,7 @@ func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byt
 		return [][]byte{raw}, true, nil
 	case "response.failed", "error":
 		var ev failureEvent
-		json.Unmarshal([]byte(payload), &ev)
+		shared.DecodeProbe([]byte(payload), &ev)
 		return nil, false, failureError(&ev)
 	case "response.output_item.added", "response.output_item.done":
 		var shellEvent struct {
@@ -58,7 +58,7 @@ func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byt
 				Arguments string `json:"arguments"`
 			} `json:"item"`
 		}
-		json.Unmarshal([]byte(payload), &shellEvent)
+		shared.DecodeProbe([]byte(payload), &shellEvent)
 		if sc.context.IsShell(shellEvent.Item.Name) {
 			if err := shared.ValidateShellCallID(shellEvent.Item.CallID); err != nil {
 				return nil, false, err
@@ -100,7 +100,9 @@ func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byt
 				return nil, false, nil
 			}
 			var doc map[string]json.RawMessage
-			json.Unmarshal([]byte(payload), &doc)
+			if json.Unmarshal([]byte(payload), &doc) != nil || doc == nil {
+				return [][]byte{raw}, false, nil //nolint:nilerr // a malformed event passes through verbatim
+			}
 			doc["type"] = json.RawMessage(`"response.custom_tool_call_input.delta"`)
 			doc["delta"], _ = json.Marshal(tail)
 			return [][]byte{shared.SSEEvent("response.custom_tool_call_input.delta", doc)}, false, nil
@@ -111,7 +113,7 @@ func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byt
 		return [][]byte{raw}, false, nil
 	case "response.function_call_arguments.done":
 		var shellArgs argsDeltaEvent
-		json.Unmarshal([]byte(payload), &shellArgs)
+		shared.DecodeProbe([]byte(payload), &shellArgs)
 		if sc.native.shellItems[shellArgs.ItemID] || sc.context.IsShell(shellArgs.Name) {
 			if err := decodeEvent(eventType, payload, &shellArgs); err != nil {
 				return nil, false, err
@@ -155,7 +157,7 @@ func (sc *StreamConverter) restoreCustomItem(eventType, payload string) ([]byte,
 		CallID string `json:"call_id"`
 		Name   string `json:"name"`
 	}
-	json.Unmarshal(doc["item"], &original)
+	shared.DecodeProbe(doc["item"], &original)
 	if sc.context.IsShell(original.Name) {
 		if original.ID != "" {
 			sc.native.shellItems[original.ID] = true
@@ -165,7 +167,9 @@ func (sc *StreamConverter) restoreCustomItem(eventType, payload string) ([]byte,
 		}
 		if eventType == "response.output_item.added" {
 			var item map[string]json.RawMessage
-			json.Unmarshal(doc["item"], &item)
+			if json.Unmarshal(doc["item"], &item) != nil || item == nil {
+				return nil, false // keep the upstream item verbatim
+			}
 			item["arguments"] = json.RawMessage(`""`)
 			if !shared.HasContent(item["status"]) {
 				item["status"] = json.RawMessage(`"in_progress"`)
@@ -181,7 +185,7 @@ func (sc *StreamConverter) restoreCustomItem(eventType, payload string) ([]byte,
 		var identity struct {
 			ID string `json:"id"`
 		}
-		json.Unmarshal(restored, &identity)
+		shared.DecodeProbe(restored, &identity)
 		if identity.ID != "" {
 			sc.native.shellItems[identity.ID] = true
 		}
@@ -206,25 +210,33 @@ func (sc *StreamConverter) restoreCustomInputDone(payload string) ([]byte, bool)
 	if json.Unmarshal([]byte(payload), &doc) != nil {
 		return nil, false
 	}
-	var name, id, args string
-	json.Unmarshal(doc["name"], &name)
-	json.Unmarshal(doc["item_id"], &id)
-	json.Unmarshal(doc["arguments"], &args)
+	var name, id string
+	shared.DecodeProbe(doc["name"], &name)
+	shared.DecodeProbe(doc["item_id"], &id)
+	args, argsOK := shared.StringField(doc["arguments"])
+	if args == "" {
+		// Added events may omit arguments until the deltas arrive; the
+		// accumulated stream is the real fallback for them.
+		args = sc.customArguments(id, "")
+	}
+	if !argsOK && args == "" {
+		// The event carries a non-string arguments value and nothing was
+		// accumulated: rewriting it would invent an empty input, so the
+		// caller keeps the upstream event verbatim.
+		return nil, false
+	}
 	_, known := sc.native.customItems[id]
 	if !known && !sc.context.IsCustom(name) {
 		return nil, false
 	}
 	doc["type"] = json.RawMessage(`"response.custom_tool_call_input.done"`)
-	if args == "" {
-		args = sc.customArguments(id, "")
-	}
 	doc["input"], _ = json.Marshal(shared.UnwrapCustomToolInput(args))
 	delete(doc, "arguments")
 	if name != "" {
 		item, _ := json.Marshal(map[string]any{"type": "function_call", "name": name})
 		restored, _ := shared.RestoreToolItem(item, sc.context)
 		var identity map[string]json.RawMessage
-		json.Unmarshal(restored, &identity)
+		shared.DecodeProbe(restored, &identity)
 		doc["name"] = identity["name"]
 		if namespace := identity["namespace"]; len(namespace) > 0 {
 			doc["namespace"] = namespace
