@@ -29,10 +29,11 @@ type StreamConverter struct {
 	// "id" and "call_id") announced as custom tools, so a later
 	// response.function_call_arguments.done carrying only item_id (no
 	// name) still restores to custom_tool_call_input.done.
-	customItems map[string]struct{}
-	customArgs  map[string]*strings.Builder
-	customSent  map[string]int
-	shellItems  map[string]bool
+	customItems  map[string]struct{}
+	customArgs   map[string]*strings.Builder
+	customSent   map[string]int
+	shellItems   map[string]bool
+	shellItemIDs map[string]string // call_id -> first restored item id
 
 	// Response identity captured from response.created.
 	id      string
@@ -83,7 +84,8 @@ func NewStreamConverter(sourceFormat string, tools ...*shared.ResponseTools) *St
 		respTools:   shared.ResponseToolContext(tools),
 		customItems: map[string]struct{}{},
 		customArgs:  map[string]*strings.Builder{}, customSent: map[string]int{},
-		shellItems: map[string]bool{},
+		shellItems:   map[string]bool{},
+		shellItemIDs: map[string]string{},
 	}
 	alloc := sc.allocIndex
 	if sourceFormat == "messages" {
@@ -633,7 +635,7 @@ func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byt
 				if err := shared.ValidateShellResponse(response, "responses", sc.respTools); err != nil {
 					return nil, false, err
 				}
-				restored := shared.RestoreResponseTools(response, sc.respTools)
+				restored := shared.RestoreResponseTools(response, sc.respTools, sc.shellItemIDs)
 				if string(restored) != string(response) {
 					doc["response"] = restored
 					return [][]byte{shared.SSEEvent(eventType, doc)}, true, nil
@@ -649,13 +651,19 @@ func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byt
 		var shellEvent struct {
 			Item struct {
 				Name      string `json:"name"`
+				CallID    string `json:"call_id"`
 				Arguments string `json:"arguments"`
 			} `json:"item"`
 		}
 		json.Unmarshal([]byte(payload), &shellEvent)
-		if eventType == "response.output_item.done" && sc.respTools.IsShell(shellEvent.Item.Name) {
-			if _, err := shared.ShellAction(shellEvent.Item.Arguments); err != nil {
+		if sc.respTools.IsShell(shellEvent.Item.Name) {
+			if err := shared.ValidateShellCallID(shellEvent.Item.CallID); err != nil {
 				return nil, false, err
+			}
+			if eventType == "response.output_item.done" {
+				if _, err := shared.ShellAction(shellEvent.Item.Arguments); err != nil {
+					return nil, false, err
+				}
 			}
 		}
 		if sc.respTools != nil {
@@ -762,9 +770,18 @@ func (sc *StreamConverter) restoreCustomItem(eventType, payload string) ([]byte,
 			doc["item"], _ = json.Marshal(item)
 		}
 	}
-	restored, ok := shared.RestoreToolItem(doc["item"], sc.respTools)
+	restored, ok := shared.RestoreToolItem(doc["item"], sc.respTools, sc.shellItemIDs)
 	if !ok {
 		return nil, false
+	}
+	if sc.respTools.IsShell(original.Name) {
+		var identity struct {
+			ID string `json:"id"`
+		}
+		json.Unmarshal(restored, &identity)
+		if identity.ID != "" {
+			sc.shellItems[identity.ID] = true
+		}
 	}
 	if sc.respTools.IsCustom(original.Name) {
 		if original.ID != "" {

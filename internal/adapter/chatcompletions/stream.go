@@ -602,6 +602,11 @@ func (sc *StreamConverter) responsesLine(line string) ([][]byte, *errclass.Error
 		if t.id == "" || t.name == "" {
 			continue
 		}
+		if sc.respTools.IsShell(t.name) {
+			if err := shared.ValidateShellCallID(t.id); err != nil {
+				return nil, err
+			}
+		}
 		if !t.announced {
 			t.announced = true
 			events = append(events, sc.responsesEm().ItemAdded(t.blockIndex, map[string]any{"type": "function_call", "call_id": t.id, "name": t.name, "arguments": ""}))
@@ -738,6 +743,9 @@ func (sc *StreamConverter) validateTools() *errclass.Error {
 			return errclass.Translation("Chat Completions tool ended without an id or name")
 		}
 		if sc.respTools.IsShell(tool.name) {
+			if err := shared.ValidateShellCallID(tool.id); err != nil {
+				return err
+			}
 			if _, err := shared.ShellAction(tool.args.String()); err != nil {
 				return err
 			}

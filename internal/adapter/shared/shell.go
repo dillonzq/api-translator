@@ -63,9 +63,9 @@ func validateLocalShellEnvironment(raw json.RawMessage) *errclass.Error {
 			return &errclass.Error{Class: errclass.ClassUnsupported, Message: "local shell environment field cannot be represented by function tools"}
 		}
 	}
-	if HasContent(env["skills"]) {
+	if rawSkills, present := env["skills"]; present {
 		var skills []json.RawMessage
-		if json.Unmarshal(env["skills"], &skills) != nil {
+		if json.Unmarshal(rawSkills, &skills) != nil || skills == nil {
 			return errclass.Translation("local shell skills must be an array")
 		}
 		if len(skills) != 0 {
@@ -80,6 +80,11 @@ func ShellAction(args string) (json.RawMessage, *errclass.Error) {
 	var action rawObject
 	if json.Unmarshal([]byte(args), &action) != nil || action == nil {
 		return nil, errclass.Translation("shell action must be an object")
+	}
+	for key := range action {
+		if key != "commands" && key != "timeout_ms" && key != "max_output_length" {
+			return nil, errclass.Translation("shell action contains unsupported properties")
+		}
 	}
 	var commands []string
 	if json.Unmarshal(action["commands"], &commands) != nil || len(commands) == 0 {
@@ -102,9 +107,17 @@ func ShellAction(args string) (json.RawMessage, *errclass.Error) {
 	return raw, nil
 }
 
+// ValidateShellCallID rejects incomplete identities before an item is restored.
+func ValidateShellCallID(callID string) *errclass.Error {
+	if strings.TrimSpace(callID) == "" {
+		return errclass.Translation("shell call requires a nonblank call_id")
+	}
+	return nil
+}
+
 func shellHistory(item rawObject) *errclass.Error {
-	if strings.TrimSpace(rawString(item, "call_id")) == "" {
-		return errclass.Translation("shell history requires call_id")
+	if err := ValidateShellCallID(rawString(item, "call_id")); err != nil {
+		return err
 	}
 	switch rawString(item, "type") {
 	case "shell_call":
@@ -353,16 +366,22 @@ func ValidateShellResponse(body []byte, format string, state *ResponseTools) *er
 	for _, call := range calls {
 		name := rawString(call, "name")
 		args := rawString(call, "arguments")
+		callID := rawString(call, "call_id")
 		if format == FormatMessages {
 			args = string(call["input"])
+			callID = rawString(call, "id")
 		}
 		if format == FormatChatCompletions {
+			callID = rawString(call, "id")
 			var fn rawObject
 			json.Unmarshal(call["function"], &fn)
 			name = rawString(fn, "name")
 			args = rawString(fn, "arguments")
 		}
 		if state.IsShell(name) {
+			if err := ValidateShellCallID(callID); err != nil {
+				return err
+			}
 			if _, err := ShellAction(args); err != nil {
 				return err
 			}

@@ -409,6 +409,11 @@ func (sc *StreamConverter) dispatchResponses(etype string, ev *sseEvent, events 
 				sc.respTools.Report("messages", "responses", "content.web_search_tool_result", true)
 			}
 		case "tool_use":
+			if sc.respTools.IsShell(bs.name) {
+				if err := shared.ValidateShellCallID(bs.id); err != nil {
+					return false, err
+				}
+			}
 			if sc.respTools.IsShell(bs.name) && shared.HasContent(ev.ContentBlock.Input) {
 				var input map[string]json.RawMessage
 				if json.Unmarshal(ev.ContentBlock.Input, &input) != nil {
@@ -633,8 +638,8 @@ func (sc *StreamConverter) Finish() ([][]byte, *errclass.Error) {
 func (sc *StreamConverter) validateShellTools() *errclass.Error {
 	for _, block := range sc.blocks {
 		if sc.respTools.IsShell(block.name) {
-			if block.id == "" {
-				return errclass.Translation("shell tool has no call identity")
+			if err := shared.ValidateShellCallID(block.id); err != nil {
+				return err
 			}
 			if _, err := shared.ShellAction(block.args.String()); err != nil {
 				return err

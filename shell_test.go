@@ -460,7 +460,7 @@ func TestShellLocalSkills(t *testing.T) {
 			if err != nil || !toolState(state).IsShell("shell") || strings.Contains(string(body), `"skills"`) {
 				t.Fatalf("%s/%s empty skills: %s %v", target, policy, body, err)
 			}
-			for _, skills := range []string{`[{}]`, `"invalid"`} {
+			for _, skills := range []string{`[{}]`, `"invalid"`, `null`, `{}`, `false`, `42`} {
 				state := NewRequestState()
 				state.Options.LossPolicy = policy
 				bad := strings.Replace(request, `"skills":[]`, `"skills":`+skills, 1)
@@ -681,6 +681,173 @@ func TestShellValidationPreservesUpstreamFailures(t *testing.T) {
 		_, err := ConvertResponse(FormatResponses, FormatResponses, 200, shellJSON(body), state)
 		if err == nil || err.Class != ClassUpstream || !err.Retryable {
 			t.Fatalf("status=%s err=%v", status, err)
+		}
+	}
+}
+
+func TestShellNativeStreamRetainsFirstItemIDs(t *testing.T) {
+	for _, terminal := range []string{"completed", "incomplete"} {
+		for _, stride := range []int{1, 100000} {
+			state := NewRequestState()
+			if _, err := NormalizeResponsesRequest([]byte(shellRequest), state); err != nil {
+				t.Fatal(err)
+			}
+			item := func(callID string) map[string]any {
+				return map[string]any{"type": "function_call", "call_id": callID, "name": "shell", "arguments": shellArgs}
+			}
+			stream := ""
+			expected := map[string]string{"c1": "native_a", "c2": "native_b"}
+			for _, callID := range []string{"c1", "c2"} {
+				added := item(callID)
+				added["id"] = expected[callID]
+				added["arguments"] = ""
+				stream += shellEvent("response.output_item.added", map[string]any{"type": "response.output_item.added", "item": added})
+			}
+			for _, callID := range []string{"c2", "c1"} {
+				// Done snapshots and the terminal response both omit the native item id.
+				stream += shellEvent("response.output_item.done", map[string]any{"type": "response.output_item.done", "item": item(callID)})
+			}
+			stream += shellEvent("response."+terminal, map[string]any{"type": "response." + terminal, "response": map[string]any{"id": "r", "object": "response", "status": terminal, "output": []any{item("c1"), item("c2")}}})
+			converter, _ := NewStreamConverter(FormatResponses, FormatResponses, state)
+			input := []byte(stream)
+			var frames [][]byte
+			done := false
+			for len(input) > 0 {
+				n := min(stride, len(input))
+				out, d, err := converter.Feed(input[:n])
+				if err != nil {
+					t.Fatal(err)
+				}
+				frames = append(frames, out...)
+				done = done || d
+				input = input[n:]
+			}
+			if !done {
+				t.Fatal("stream did not terminate")
+			}
+			decoder := &SSEDecoder{}
+			observations := 0
+			check := func(v map[string]any) {
+				t.Helper()
+				callID := v["call_id"].(string)
+				if v["id"] != expected[callID] {
+					t.Fatalf("%s id=%v want %s", callID, v["id"], expected[callID])
+				}
+				observations++
+			}
+			for _, event := range decoder.Feed(joinFrames(frames)) {
+				doc := shellObject(t, event.Data)
+				if event.Event == "response.output_item.added" || event.Event == "response.output_item.done" {
+					check(doc["item"].(map[string]any))
+				} else {
+					for _, v := range doc["response"].(map[string]any)["output"].([]any) {
+						check(v.(map[string]any))
+					}
+				}
+			}
+			if observations != 6 {
+				t.Fatalf("observations=%d", observations)
+			}
+		}
+	}
+}
+
+func TestShellRejectsBlankResponseCallIDs(t *testing.T) {
+	state := NewRequestState()
+	if _, err := NormalizeResponsesRequest([]byte(shellRequest), state); err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{FormatResponses, FormatChatCompletions, FormatMessages} {
+		for _, id := range []any{nil, "", " \t ", 42} {
+			body := shellObject(t, shellUpstream(format, shellArgs))
+			var call map[string]any
+			key := "id"
+			switch format {
+			case FormatResponses:
+				call = body["output"].([]any)[0].(map[string]any)
+				key = "call_id"
+			case FormatMessages:
+				call = body["content"].([]any)[0].(map[string]any)
+			default:
+				call = body["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)
+			}
+			if id == nil {
+				delete(call, key)
+			} else {
+				call[key] = id
+			}
+			if _, err := ConvertResponse(format, FormatResponses, 200, shellJSON(body), state); err == nil || err.Class != ClassTranslation {
+				t.Fatalf("%s id=%v err=%v", format, id, err)
+			}
+		}
+	}
+	for _, id := range []any{nil, "", " \t ", 42} {
+		for _, event := range []string{"response.output_item.added", "response.output_item.done", "response.completed", "response.incomplete"} {
+			item := map[string]any{"type": "function_call", "name": "shell", "id": "sc1", "arguments": shellArgs}
+			if id != nil {
+				item["call_id"] = id
+			}
+			payload := map[string]any{"type": event, "item": item}
+			if strings.HasSuffix(event, "completed") || strings.HasSuffix(event, "incomplete") {
+				delete(payload, "item")
+				payload["response"] = map[string]any{"id": "r", "object": "response", "status": strings.TrimPrefix(event, "response."), "output": []any{item}}
+			}
+			converter, _ := NewStreamConverter(FormatResponses, FormatResponses, state)
+			out, done, err := converter.Feed([]byte(shellEvent(event, payload)))
+			if err == nil || done || strings.Contains(string(joinFrames(out)), `"type":"shell_call"`) {
+				t.Fatalf("%s id=%v done=%v err=%v frames=%s", event, id, done, err, joinFrames(out))
+			}
+		}
+	}
+}
+
+func TestShellActionRejectsUnknownProperties(t *testing.T) {
+	args := `{"commands":["pwd"],"cwd":"/tmp"}`
+	for _, target := range []string{FormatResponses, FormatChatCompletions, FormatMessages} {
+		state := NewRequestState()
+		request := `{"tools":[{"type":"shell"}],"input":[{"type":"shell_call","call_id":"c1","action":` + args + `}]}`
+		var err *Error
+		if target == FormatResponses {
+			_, err = NormalizeResponsesRequest([]byte(request), state)
+		} else {
+			_, err = ConvertRequest(target, "m", FormatResponses, []byte(request), state)
+		}
+		if err == nil || err.Class != ClassTranslation || toolState(state).IsShell("shell") {
+			t.Fatalf("%s accepted invalid history: %v", target, err)
+		}
+	}
+	state := NewRequestState()
+	if _, err := NormalizeResponsesRequest([]byte(shellRequest), state); err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{FormatResponses, FormatChatCompletions, FormatMessages} {
+		if _, err := ConvertResponse(format, FormatResponses, 200, shellUpstream(format, args), state); err == nil || err.Class != ClassTranslation {
+			t.Fatalf("%s accepted invalid action: %v", format, err)
+		}
+		converter, _ := NewStreamConverter(format, FormatResponses, state)
+		_, done, err := converter.Feed([]byte(shellStreamWithArgs(format, args)))
+		if err == nil || done {
+			t.Fatalf("%s stream accepted invalid action: done=%v err=%v", format, done, err)
+		}
+	}
+}
+
+func TestShellHistoryRejectsNullSkills(t *testing.T) {
+	for _, target := range []string{FormatResponses, FormatChatCompletions, FormatMessages} {
+		for _, source := range []string{
+			`{"input":[{"type":"additional_tools","tools":[{"type":"shell","environment":{"type":"local","skills":null}}]}]}`,
+			`{"input":[{"type":"shell_call","call_id":"c1","environment":{"type":"local","skills":null},"action":{"commands":["pwd"]}}]}`,
+		} {
+			state := NewRequestState()
+			var err *Error
+			if target == FormatResponses {
+				_, err = NormalizeResponsesRequest([]byte(source), state)
+			} else {
+				_, err = ConvertRequest(target, "m", FormatResponses, []byte(source), state)
+			}
+			if err == nil || err.Class != ClassTranslation || toolState(state).IsShell("shell") {
+				t.Fatalf("%s accepted null skills: %v", target, err)
+			}
 		}
 	}
 }
