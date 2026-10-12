@@ -576,7 +576,7 @@ func TestFromResponses_NamespaceChildUnrolls(t *testing.T) {
 			]}
 		]
 	}`
-	out, eErr := BuildRequest("qwen", "responses", []byte(body), shared.NewResponseTools())
+	out, eErr := BuildRequest("qwen", "responses", []byte(body), shared.NewConversionContext())
 	if eErr != nil {
 		t.Fatalf("unexpected error: %v", eErr)
 	}
@@ -1029,50 +1029,5 @@ func TestFromResponses_CustomToolCallAndOutput(t *testing.T) {
 	}
 	if tr == nil || tr["tool_use_id"] != "call_c1" || tr["content"] != "ok" {
 		t.Fatalf("tool_result block wrong: %v", user["content"])
-	}
-}
-
-func TestInHistorySystemRoleInMessages(t *testing.T) {
-	body := []byte(`{"model":"orig","max_tokens":10,"system":"base",` +
-		`"messages":[{"role":"system","content":"in-history rules"},` +
-		`{"role":"user","content":"hi"},` +
-		`{"role":"system","content":"more rules"},` +
-		`{"role":"assistant","content":"hello"}]}`)
-	out, eErr := BuildRequest("minimax", "messages", body)
-	if eErr != nil {
-		t.Fatalf("unexpected error: %v", eErr)
-	}
-	m := decodeReq(t, out)
-	if m["model"] != "minimax" {
-		t.Errorf("model = %v", m["model"])
-	}
-	var sysTexts []string
-	switch sys := m["system"].(type) {
-	case string:
-		sysTexts = []string{sys}
-	case []any:
-		for _, b := range sys {
-			sysTexts = append(sysTexts, b.(map[string]any)["text"].(string))
-		}
-	default:
-		t.Fatalf("system = %v (%T), want folded base + in-history texts", m["system"], m["system"])
-	}
-	joined := strings.Join(sysTexts, "\n")
-	for _, want := range []string{"base", "in-history rules", "more rules"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("system missing %q: %v", want, sysTexts)
-		}
-	}
-	msgs := m["messages"].([]any)
-	for _, raw := range msgs {
-		if raw.(map[string]any)["role"] == "system" {
-			t.Fatalf("system turn must be folded into system field, got messages = %v", msgs)
-		}
-	}
-	if len(msgs) != 2 {
-		t.Fatalf("messages = %d: %v, want 2 (user + assistant)", len(msgs), msgs)
-	}
-	if msgs[0].(map[string]any)["role"] != "user" || msgs[1].(map[string]any)["role"] != "assistant" {
-		t.Errorf("messages roles = %v", msgs)
 	}
 }

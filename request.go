@@ -12,7 +12,7 @@ func ConvertRequest(targetFormat, upstreamModel, sourceFormat string, payload []
 	if err := validateFormats(targetFormat, sourceFormat); err != nil {
 		return nil, err
 	}
-	if err := toolState(state).CheckRequestLosses(sourceFormat, targetFormat, payload); err != nil {
+	if err := conversionContext(state).CheckRequestLosses(sourceFormat, targetFormat, payload); err != nil {
 		return nil, err
 	}
 	if sourceFormat == targetFormat {
@@ -21,33 +21,27 @@ func ConvertRequest(targetFormat, upstreamModel, sourceFormat string, payload []
 	if sourceFormat == FormatResponses && state == nil {
 		return nil, Translation("Responses cross-protocol conversion requires request state")
 	}
-	ctx := toolState(state)
-	if sourceFormat == FormatResponses {
-		ctx = ctx.Clone()
-		var err *Error
-		payload, err = shared.NormalizeShellRequest(payload, ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-	var body []byte
-	var err *Error
-	switch targetFormat {
-	case FormatChatCompletions:
-		body, err = chatcompletions.BuildRequest(upstreamModel, sourceFormat, payload, ctx)
-	case FormatMessages:
-		body, err = messages.BuildRequest(upstreamModel, sourceFormat, payload, ctx)
-	default:
-		body, err = responses.BuildRequest(upstreamModel, sourceFormat, payload, ctx)
-	}
-	if sourceFormat == FormatResponses {
-		if err == nil {
-			state.tools = *ctx
-		} else {
-			for _, diagnostic := range ctx.Diagnostics() {
-				state.tools.Record(diagnostic)
+	ctx := conversionContext(state)
+	convert := func(work *shared.ConversionContext) ([]byte, *Error) {
+		body := payload
+		if sourceFormat == FormatResponses {
+			var err *Error
+			body, err = shared.NormalizeShellRequest(body, work)
+			if err != nil {
+				return nil, err
 			}
 		}
+		switch targetFormat {
+		case FormatChatCompletions:
+			return chatcompletions.BuildRequest(upstreamModel, sourceFormat, body, work)
+		case FormatMessages:
+			return messages.BuildRequest(upstreamModel, sourceFormat, body, work)
+		default:
+			return responses.BuildRequest(upstreamModel, sourceFormat, body, work)
+		}
 	}
-	return body, err
+	if sourceFormat == FormatResponses {
+		return ctx.WithToolTransaction(convert)
+	}
+	return convert(ctx)
 }

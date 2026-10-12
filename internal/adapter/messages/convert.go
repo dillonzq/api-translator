@@ -46,22 +46,22 @@ type claudeResponseIn struct {
 }
 
 // ConvertNonStreamResponse translates an upstream Anthropic Messages HTTP
-// response back into the client protocol sourceFormat (FR-006, AC §C).
+// response back into the client protocol outputFormat (FR-006, AC §C).
 // Statuses >= 400 become classified redacted errors (§7); "messages"
 // passes through; "chat-completions" and "responses" are converted, preserving
 // text, thinking, tool_use, stop reason, and usage. Unknown formats are ClassUnsupported;
 // malformed upstream bodies are ClassTranslation.
-func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func ConvertNonStreamResponse(outputFormat string, status int, upstreamBody []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	if status >= 400 {
 		return nil, shared.UpstreamStatusError(status, upstreamBody)
 	}
 	if err := shared.CheckProtocolFailure(upstreamBody, "messages"); err != nil {
 		return nil, err
 	}
-	if sourceFormat != "messages" {
-		shared.ResponseToolContext(tools).RecordResponseLosses("messages", sourceFormat, upstreamBody)
+	if outputFormat != "messages" {
+		shared.ContextOrNew(tools).RecordResponseLosses("messages", outputFormat, upstreamBody)
 	}
-	switch sourceFormat {
+	switch outputFormat {
 	case "messages":
 		if !json.Valid(upstreamBody) {
 			return nil, errclass.Translation("malformed Messages response JSON")
@@ -70,12 +70,12 @@ func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []by
 	case "chat-completions":
 		return claudeToChat(upstreamBody, tools...)
 	case "responses":
-		if err := shared.ValidateShellResponse(upstreamBody, "messages", shared.ResponseToolContext(tools)); err != nil {
+		if err := shared.ValidateShellResponse(upstreamBody, "messages", shared.ContextOrNew(tools)); err != nil {
 			return nil, err
 		}
 		return claudeToResponses(upstreamBody, tools...)
 	default:
-		return nil, shared.UnsupportedFormat(sourceFormat, EndpointPath)
+		return nil, shared.UnsupportedFormat(outputFormat, EndpointPath)
 	}
 }
 
@@ -99,14 +99,14 @@ func decodeClaude(body []byte) (*claudeResponseIn, *errclass.Error) {
 // to finish_reason, and input/output tokens map to prompt/completion
 // usage (FR-006, AC §C). Thinking maps to reasoning_content;
 // redacted_thinking and signatures have no compatible representation.
-func claudeToChat(body []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func claudeToChat(body []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	resp, eErr := decodeClaude(body)
 	if eErr != nil {
 		return nil, eErr
 	}
 	var text strings.Builder
 	msg := shared.CCResponseMessage{CCMessage: shared.CCMessage{Role: "assistant"}}
-	ctx := shared.ResponseToolContext(tools)
+	ctx := shared.ContextOrNew(tools)
 	offset := 0
 	for _, blk := range resp.Content {
 		switch blk.Type {
@@ -165,14 +165,13 @@ func decodeBlockInput(raw json.RawMessage) any {
 }
 
 // ---- Messages -> Responses (Responses) (FR-006) ----
-
 // claudeToResponses converts a Messages response into a Responses result:
 // text blocks aggregate into an assistant output_text message item,
 // tool_use blocks become function_call items, stop_reason end_turn maps to
 // status completed, and input/output tokens map to input/output usage
 // (FR-006). Thinking becomes reasoning summary items; redacted_thinking
 // and signatures have no compatible representation.
-func claudeToResponses(body []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func claudeToResponses(body []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	resp, eErr := decodeClaude(body)
 	if eErr != nil {
 		return nil, eErr
@@ -190,7 +189,7 @@ func claudeToResponses(body []byte, tools ...*shared.ResponseTools) ([]byte, *er
 		Usage:  shared.NewResponsesUsageFrom(resp.Usage.InputTokens+valueOrZero(resp.Usage.CacheRead)+valueOrZero(resp.Usage.CacheCreation), resp.Usage.OutputTokens, shared.UsageDetails{CachedTokens: resp.Usage.CacheRead, CacheWriteTokens: resp.Usage.CacheCreation}),
 	}
 	oa := shared.NewOutputAssembler(resp.ID, tools...)
-	ctx := shared.ResponseToolContext(tools)
+	ctx := shared.ContextOrNew(tools)
 	offset := 0
 	search := map[string]*shared.HostedSearch{}
 	searchItems := map[string]map[string]any{}

@@ -4,37 +4,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/dillonzq/api-translator/internal/adapter/shared"
 	"github.com/dillonzq/api-translator/internal/errclass"
 )
 
-// StreamConverter converts an upstream /v1/responses SSE stream into the
-// client protocol incrementally (FR-006, AC §D; Luna REQUIRED v1 scope per
-// 07-open-questions.md §5).
+// StreamConverter incrementally converts an upstream Responses SSE stream
+// into the selected output protocol.
 //
 // Contract: instances are single-use and strictly sequential — Feed is
 // called from one goroutine with consecutive network chunks; there is no
 // internal locking. Partial SSE lines are buffered until a blank line
 // completes the `event:`/`data:` pair.
 type StreamConverter struct {
-	done   bool
-	ending bool
-	framer *shared.SSEFramer
-	source string
+	messages     messagesOutput
+	native       nativeOutput
+	done         bool
+	ending       bool
+	framer       *shared.SSEFramer
+	outputFormat string
 
-	respTools *shared.ResponseTools
-	// customItems tracks upstream function_call item identifiers (both
-	// "id" and "call_id") announced as custom tools, so a later
-	// response.function_call_arguments.done carrying only item_id (no
-	// name) still restores to custom_tool_call_input.done.
-	customItems  map[string]struct{}
-	customArgs   map[string]*strings.Builder
-	customSent   map[string]int
-	shellItems   map[string]bool
-	shellItemIDs map[string]string // call_id -> first restored item id
-
+	context *shared.ConversionContext
 	// Response identity captured from response.created.
 	id      string
 	model   string
@@ -44,51 +34,36 @@ type StreamConverter struct {
 	toolCallsSeen bool
 
 	// Reasoning parts track both target formats; block state is Messages-only.
-	reasonIndex    int
-	reasonOpen     bool
 	reasoningParts map[string]*strings.Builder
 	refused        bool
-	textIndex      int
-	textOpen       bool
 	nextIndex      int
-	openBlocks     []int
 
-	// Shared function_call announce-or-replay decision table for both
-	// conversion targets; an instance converts to exactly one target,
-	// so nextIndex doubles as the tool block index allocator.
-	tracker        *toolCallTracker
-	messagesTools  map[int]*messagesTool
-	messagesQueue  []messagesEmission
-	textParts      map[string]*visibleTextPart
-	textRunes      int
-	lastTextPart   string
-	messagesText   strings.Builder
-	messagesSearch map[string]*messagesSearch
-	draining       bool
+	// Source tool identities and argument replay are shared across targets.
+	// Messages block indexes belong to messagesOutput, independently of tool ordinals.
+	tracker      *toolCallTracker
+	textParts    map[string]*visibleTextPart
+	textRunes    int
+	lastTextPart string
 }
 
-// NewStreamConverter builds a converter for sourceFormat ("chat-completions",
+// NewStreamConverter builds a converter for outputFormat ("chat-completions",
 // "messages", "responses"); unknown formats fail on first Feed with
 // ClassUnsupported (same classes as BuildRequest).
-func NewStreamConverter(sourceFormat string, tools ...*shared.ResponseTools) *StreamConverter {
+func NewStreamConverter(outputFormat string, tools ...*shared.ConversionContext) *StreamConverter {
 	sc := &StreamConverter{
 		// wantRaw only for the Responses passthrough, which
 		// forwards verbatim blocks; a rebuilt single data line would
 		// embed raw newlines from legally multi-data-line frames and
 		// corrupt native framing. Conversion targets parse the joined
 		// payload and never read raw.
-		framer:      shared.NewSSEFramer(sourceFormat == "responses"),
-		source:      sourceFormat,
-		id:          "api-translator",
-		textIndex:   -1,
-		respTools:   shared.ResponseToolContext(tools),
-		customItems: map[string]struct{}{},
-		customArgs:  map[string]*strings.Builder{}, customSent: map[string]int{},
-		shellItems:   map[string]bool{},
-		shellItemIDs: map[string]string{},
+		framer:       shared.NewSSEFramer(outputFormat == "responses"),
+		outputFormat: outputFormat,
+		id:           "api-translator",
+		context:      shared.ContextOrNew(tools),
 	}
+	sc.native = newNativeOutput()
 	alloc := sc.allocIndex
-	if sourceFormat == "messages" {
+	if outputFormat == "messages" {
 		// Tool tracker ordinals are separate from wire block indexes. Blocks
 		// receive their index when emitted from the serialized Messages queue.
 		ordinal := 0
@@ -98,9 +73,7 @@ func NewStreamConverter(sourceFormat string, tools ...*shared.ResponseTools) *St
 	return sc
 }
 
-// allocIndex hands out the next block/entry index, shared by text and
-// tool blocks in Messages vocabulary and by tool entries alone in Chat
-// Completions vocabulary (only one target runs per converter instance).
+// allocIndex allocates compact tool-call indexes for Chat Completions output.
 func (sc *StreamConverter) allocIndex() int {
 	i := sc.nextIndex
 	sc.nextIndex++
@@ -296,10 +269,10 @@ func decodeEvent[T any](eventType, payload string, v *T) *errclass.Error {
 // malformed-payload translation failures keep their pre-existing
 // precedence over ClassUnsupported.
 func (sc *StreamConverter) checkTarget() *errclass.Error {
-	if sc.source == "chat-completions" || sc.source == "messages" {
+	if sc.outputFormat == "chat-completions" || sc.outputFormat == "messages" {
 		return nil
 	}
-	return shared.UnsupportedFormat(sc.source, EndpointPath)
+	return shared.UnsupportedFormat(sc.outputFormat, EndpointPath)
 }
 
 // Feed consumes one network chunk and returns synthesized client events,
@@ -318,14 +291,14 @@ func (sc *StreamConverter) Feed(chunk []byte) (events [][]byte, done bool, eErr 
 			return events, done, nil
 		}
 		if (eventType == "response.completed" || eventType == "response.incomplete" || sc.ending && payload != "") && !shared.IsJSONObject(payload) {
-			return nil, false, errclass.Translation("Responses stream has an incomplete event payload")
+			return events, false, errclass.Translation("Responses stream has an incomplete event payload")
 		}
 		if eventType == "response.completed" || eventType == "response.incomplete" {
 			if eErr := validateTerminalPayload(eventType, payload); eErr != nil {
 				return events, false, eErr
 			}
 		}
-		if sc.source == "responses" {
+		if sc.outputFormat == "responses" {
 			evs, d, dErr := sc.passthroughEvent(eventType, payload, raw)
 			events = append(events, evs...)
 			if dErr != nil {
@@ -399,10 +372,10 @@ func (sc *StreamConverter) Finish() ([][]byte, *errclass.Error) {
 	sc.framer.End()
 	events, done, eErr := sc.Feed(nil)
 	if eErr != nil {
-		return nil, eErr
+		return events, eErr
 	}
 	if !done {
-		return nil, errclass.Translation("Responses stream ended before a terminal state")
+		return events, errclass.Translation("Responses stream ended before a terminal state")
 	}
 	return events, nil
 }
@@ -421,7 +394,7 @@ func (sc *StreamConverter) convertEvent(eventType, payload string) ([][]byte, bo
 			return nil, false, eErr
 		}
 		sc.captureResponse(&ev.Response)
-		if sc.source == "chat-completions" {
+		if sc.outputFormat == "chat-completions" {
 			return [][]byte{sc.chatChunks().RoleChunk()}, false, nil
 		}
 		// Input token count only becomes known at completion; Claude
@@ -443,7 +416,7 @@ func (sc *StreamConverter) convertEvent(eventType, payload string) ([][]byte, bo
 		key := fmt.Sprintf("%s/%s/%d", ev.ItemID, kind, index)
 		if strings.HasSuffix(eventType, ".done") {
 			events := sc.reasoningPart(key, ev.Text, true)
-			if sc.source == "messages" {
+			if sc.outputFormat == "messages" {
 				events = append(events, sc.queueMessagesContent("reasoning_stop", "")...)
 			}
 			return events, false, nil
@@ -567,29 +540,29 @@ func (sc *StreamConverter) convertEvent(eventType, payload string) ([][]byte, bo
 		var events [][]byte
 		for _, item := range ev.Response.Output {
 			if err := validateOutputItem(item); err != nil {
-				return nil, false, err
+				return events, false, err
 			}
 			switch item.Type {
 			case "reasoning":
 				events = append(events, sc.reasoningSnapshot(item)...)
 			case "message":
 				more, _, eErr := sc.messageSnapshot(item)
-				if eErr != nil {
-					return nil, false, eErr
-				}
 				events = append(events, more...)
+				if eErr != nil {
+					return events, false, eErr
+				}
 			case "web_search_call":
 				more, _, err := sc.searchItem(item, true)
-				if err != nil {
-					return nil, false, err
-				}
 				events = append(events, more...)
+				if err != nil {
+					return events, false, err
+				}
 			case "function_call", "custom_tool_call":
 				more, _, eErr := sc.outputItem(&item, true)
-				if eErr != nil {
-					return nil, false, eErr
-				}
 				events = append(events, more...)
+				if eErr != nil {
+					return events, false, eErr
+				}
 			}
 		}
 		tail, done, eErr := sc.terminal(eventType == "response.incomplete", int(ev.Response.Usage.InputTokens), int(ev.Response.Usage.OutputTokens), details)
@@ -605,7 +578,7 @@ func (sc *StreamConverter) convertEvent(eventType, payload string) ([][]byte, bo
 		return nil, false, failureError(&ev)
 	default:
 		if !knownResponseMetadataEvent(eventType) {
-			sc.respTools.Report("responses", sc.source, "event."+eventType, true)
+			sc.context.Report("responses", sc.outputFormat, "event."+eventType, true)
 		}
 		// Informational events (response.in_progress, annotations)
 		// have no client equivalent and are omitted
@@ -619,226 +592,15 @@ func (sc *StreamConverter) convertEvent(eventType, payload string) ([][]byte, bo
 	}
 }
 
-// passthroughEvent echoes native Responses frames verbatim (the framer's
-// raw block, byte-identical to the upstream bytes); terminal events flip
-// done after the common terminal validation. Failure/error payloads are parsed
-// best-effort, so an unparseable failure degrades to a retryable error rather
-// than failing the passthrough contract. Items for tools originally
-// declared as custom restore to custom_tool_call shapes so native clients
-// can dispatch them.
-func (sc *StreamConverter) passthroughEvent(eventType, payload string, raw []byte) ([][]byte, bool, *errclass.Error) {
-	switch eventType {
-	case "response.completed", "response.incomplete":
-		var doc map[string]json.RawMessage
-		if json.Unmarshal([]byte(payload), &doc) == nil {
-			if response, ok := doc["response"]; ok {
-				if err := shared.ValidateShellResponse(response, "responses", sc.respTools); err != nil {
-					return nil, false, err
-				}
-				restored := shared.RestoreResponseTools(response, sc.respTools, sc.shellItemIDs)
-				if string(restored) != string(response) {
-					doc["response"] = restored
-					return [][]byte{shared.SSEEvent(eventType, doc)}, true, nil
-				}
-			}
-		}
-		return [][]byte{raw}, true, nil
-	case "response.failed", "error":
-		var ev failureEvent
-		json.Unmarshal([]byte(payload), &ev)
-		return nil, false, failureError(&ev)
-	case "response.output_item.added", "response.output_item.done":
-		var shellEvent struct {
-			Item struct {
-				Name      string `json:"name"`
-				CallID    string `json:"call_id"`
-				Arguments string `json:"arguments"`
-			} `json:"item"`
-		}
-		json.Unmarshal([]byte(payload), &shellEvent)
-		if sc.respTools.IsShell(shellEvent.Item.Name) {
-			if err := shared.ValidateShellCallID(shellEvent.Item.CallID); err != nil {
-				return nil, false, err
-			}
-			if eventType == "response.output_item.done" {
-				if _, err := shared.ShellAction(shellEvent.Item.Arguments); err != nil {
-					return nil, false, err
-				}
-			}
-		}
-		if sc.respTools != nil {
-			if rewritten, ok := sc.restoreCustomItem(eventType, payload); ok {
-				return [][]byte{rewritten}, false, nil
-			}
-		}
-		if doc, changed := shared.RestoreToolEventIdentity([]byte(payload), sc.respTools); changed && (eventType == "response.function_call_arguments.delta" || eventType == "response.function_call_arguments.done") {
-			return [][]byte{shared.SSEEvent(eventType, doc)}, false, nil
-		}
-		return [][]byte{raw}, false, nil
-	case "response.function_call_arguments.delta":
-		var ev argsDeltaEvent
-		if err := decodeEvent(eventType, payload, &ev); err != nil {
-			return nil, false, err
-		}
-		if sc.shellItems[ev.ItemID] || sc.respTools.IsShell(ev.Name) {
-			sc.shellItems[ev.ItemID] = true
-			sc.customArguments(ev.ItemID, ev.Delta)
-			return nil, false, nil
-		}
-		if ev.ItemID != "" && sc.respTools.IsCustom(ev.Name) {
-			sc.customItems[ev.ItemID] = struct{}{}
-		}
-		if _, ok := sc.customItems[ev.ItemID]; ok {
-			sc.customArguments(ev.ItemID, ev.Delta)
-			sent := sc.customSent[ev.ItemID]
-			tail := shared.CustomInputTail(sc.customArguments(ev.ItemID, ""), &sent)
-			sc.customSent[ev.ItemID] = sent
-			if tail == "" {
-				return nil, false, nil
-			}
-			var doc map[string]json.RawMessage
-			json.Unmarshal([]byte(payload), &doc)
-			doc["type"] = json.RawMessage(`"response.custom_tool_call_input.delta"`)
-			doc["delta"], _ = json.Marshal(tail)
-			return [][]byte{shared.SSEEvent("response.custom_tool_call_input.delta", doc)}, false, nil
-		}
-		if doc, changed := shared.RestoreToolEventIdentity([]byte(payload), sc.respTools); changed && (eventType == "response.function_call_arguments.delta" || eventType == "response.function_call_arguments.done") {
-			return [][]byte{shared.SSEEvent(eventType, doc)}, false, nil
-		}
-		return [][]byte{raw}, false, nil
-	case "response.function_call_arguments.done":
-		var shellArgs argsDeltaEvent
-		json.Unmarshal([]byte(payload), &shellArgs)
-		if sc.shellItems[shellArgs.ItemID] || sc.respTools.IsShell(shellArgs.Name) {
-			if err := decodeEvent(eventType, payload, &shellArgs); err != nil {
-				return nil, false, err
-			}
-			args := shellArgs.Arguments
-			if args == "" {
-				args = sc.customArguments(shellArgs.ItemID, "")
-			}
-			if _, err := shared.ShellAction(args); err != nil {
-				return nil, false, err
-			}
-			return nil, false, nil
-		}
-		if sc.respTools != nil {
-			if rewritten, ok := sc.restoreCustomInputDone(payload); ok {
-				return [][]byte{rewritten}, false, nil
-			}
-		}
-		if doc, changed := shared.RestoreToolEventIdentity([]byte(payload), sc.respTools); changed && (eventType == "response.function_call_arguments.delta" || eventType == "response.function_call_arguments.done") {
-			return [][]byte{shared.SSEEvent(eventType, doc)}, false, nil
-		}
-		return [][]byte{raw}, false, nil
-	default:
-		if doc, changed := shared.RestoreToolEventIdentity([]byte(payload), sc.respTools); changed && (eventType == "response.function_call_arguments.delta" || eventType == "response.function_call_arguments.done") {
-			return [][]byte{shared.SSEEvent(eventType, doc)}, false, nil
-		}
-		return [][]byte{raw}, false, nil
-	}
-}
-
-// restoreCustomItem rewrites a function_call output item for a custom tool
-// into its custom_tool_call shape; non-custom items report false so the
-// caller falls back to verbatim passthrough.
-func (sc *StreamConverter) restoreCustomItem(eventType, payload string) ([]byte, bool) {
-	var doc map[string]json.RawMessage
-	if json.Unmarshal([]byte(payload), &doc) != nil {
-		return nil, false
-	}
-	var original struct {
-		ID     string `json:"id"`
-		CallID string `json:"call_id"`
-		Name   string `json:"name"`
-	}
-	json.Unmarshal(doc["item"], &original)
-	if sc.respTools.IsShell(original.Name) {
-		if original.ID != "" {
-			sc.shellItems[original.ID] = true
-		}
-		if original.CallID != "" {
-			sc.shellItems[original.CallID] = true
-		}
-		if eventType == "response.output_item.added" {
-			var item map[string]json.RawMessage
-			json.Unmarshal(doc["item"], &item)
-			item["arguments"] = json.RawMessage(`""`)
-			if !shared.HasContent(item["status"]) {
-				item["status"] = json.RawMessage(`"in_progress"`)
-			}
-			doc["item"], _ = json.Marshal(item)
-		}
-	}
-	restored, ok := shared.RestoreToolItem(doc["item"], sc.respTools, sc.shellItemIDs)
-	if !ok {
-		return nil, false
-	}
-	if sc.respTools.IsShell(original.Name) {
-		var identity struct {
-			ID string `json:"id"`
-		}
-		json.Unmarshal(restored, &identity)
-		if identity.ID != "" {
-			sc.shellItems[identity.ID] = true
-		}
-	}
-	if sc.respTools.IsCustom(original.Name) {
-		if original.ID != "" {
-			sc.customItems[original.ID] = struct{}{}
-		}
-		if original.CallID != "" {
-			sc.customItems[original.CallID] = struct{}{}
-		}
-	}
-	doc["item"] = restored
-	return shared.SSEEvent(eventType, doc), true
-}
-
-// restoreCustomInputDone rewrites a function_call_arguments.done event for
-// a custom tool into its custom_tool_call_input.done shape; non-custom
-// events report false so the caller falls back to verbatim passthrough.
-func (sc *StreamConverter) restoreCustomInputDone(payload string) ([]byte, bool) {
-	var doc map[string]json.RawMessage
-	if json.Unmarshal([]byte(payload), &doc) != nil {
-		return nil, false
-	}
-	var name, id, args string
-	json.Unmarshal(doc["name"], &name)
-	json.Unmarshal(doc["item_id"], &id)
-	json.Unmarshal(doc["arguments"], &args)
-	_, known := sc.customItems[id]
-	if !known && !sc.respTools.IsCustom(name) {
-		return nil, false
-	}
-	doc["type"] = json.RawMessage(`"response.custom_tool_call_input.done"`)
-	if args == "" {
-		args = sc.customArguments(id, "")
-	}
-	doc["input"], _ = json.Marshal(shared.UnwrapCustomToolInput(args))
-	delete(doc, "arguments")
-	if name != "" {
-		item, _ := json.Marshal(map[string]any{"type": "function_call", "name": name})
-		restored, _ := shared.RestoreToolItem(item, sc.respTools)
-		var identity map[string]json.RawMessage
-		json.Unmarshal(restored, &identity)
-		doc["name"] = identity["name"]
-		if namespace := identity["namespace"]; len(namespace) > 0 {
-			doc["namespace"] = namespace
-		}
-	}
-	return shared.SSEEvent("response.custom_tool_call_input.done", doc), true
-}
-
 // textDelta emits one output text delta: a plain Chat Completions content
 // chunk, or a Messages content_block_delta that auto-opens (and may
 // reopen) the text block.
 func (sc *StreamConverter) emitTextDelta(delta string) ([][]byte, bool, *errclass.Error) {
-	if sc.source == "chat-completions" {
+	if sc.outputFormat == "chat-completions" {
 		return [][]byte{sc.chatChunks().Delta(map[string]any{"content": delta})}, false, nil
 	}
 	var out [][]byte
-	if !sc.textOpen {
+	if !sc.messages.blocks.Active("text") {
 		// A tool_use block start closed the previous text block; a
 		// later text delta (legal Responses interleaving) reopens a
 		// fresh text block at the next free index to keep the
@@ -846,13 +608,11 @@ func (sc *StreamConverter) emitTextDelta(delta string) ([][]byte, bool, *errclas
 		// stop/reopen pattern as the Chat Completions route). Any
 		// still-open block stops first: close-before-next-start.
 		out = append(out, sc.closeOpenBlocks()...)
-		sc.textIndex = sc.allocIndex()
-		sc.textOpen = true
-		sc.openBlocks = append(sc.openBlocks, sc.textIndex)
-		out = append(out, sc.claudeChunks().ContentBlockStart(sc.textIndex, "text", map[string]any{"text": ""}))
+		_, opening := sc.messages.blocks.Start(sc.claudeChunks(), "text", map[string]any{"text": ""})
+		out = append(out, opening...)
 	}
-	out = append(out, sc.claudeChunks().ContentBlockDelta(sc.textIndex,
-		map[string]any{"type": "text_delta", "text": delta}))
+	out = append(out, sc.messages.blocks.Delta(sc.claudeChunks(),
+		map[string]any{"type": "text_delta", "text": delta})...)
 	return out, false, nil
 }
 
@@ -891,7 +651,7 @@ func (sc *StreamConverter) argsFragment(itemID, delta string) ([][]byte, bool, *
 func (sc *StreamConverter) emitToolState(st *toolCallState) ([][]byte, bool, *errclass.Error) {
 	sc.toolCallsSeen = true
 	args := st.args.String()
-	if sc.source == "chat-completions" {
+	if sc.outputFormat == "chat-completions" {
 		if !st.hasIdentity() {
 			return nil, false, nil
 		}
@@ -929,7 +689,7 @@ func (sc *StreamConverter) terminal(incomplete bool, in, out int, details shared
 	if incomplete {
 		st = "incomplete"
 	}
-	if sc.source == "chat-completions" {
+	if sc.outputFormat == "chat-completions" {
 		finish := shared.TerminalReason(sc.toolCallsSeen, "tool_calls", shared.FinishWithRefusal(shared.CCFinishFromResponseStatus(st), sc.refused))
 		// Always attached (F-R6 parity with the Messages route's terminal
 		// chunk): typed clients prefer a stable schema, zero-valued fields
@@ -942,20 +702,17 @@ func (sc *StreamConverter) terminal(incomplete bool, in, out int, details shared
 	stop := shared.TerminalReason(sc.toolCallsSeen, "tool_use", statusStop)
 	cacheRead, cacheWrite := details.CachedTokens, details.CacheWriteTokens
 	em := sc.claudeChunks()
-	for _, tool := range sc.messagesTools {
+	for _, tool := range sc.messages.tools {
 		tool.complete = true
 	}
 	events := sc.drainMessages()
 	for key, part := range sc.textParts {
 		if len(part.pending) > 0 {
-			sc.respTools.Report("responses", sc.source, "output."+key+".annotations.missing_text", false)
+			sc.context.Report("responses", sc.outputFormat, "output."+key+".annotations.missing_text", false)
 			part.pending = nil
 		}
 	}
-	for _, idx := range sc.openBlocks {
-		events = append(events, em.ContentBlockStop(idx))
-	}
-	sc.openBlocks = nil
+	events = append(events, sc.closeOpenBlocks()...)
 	events = append(events,
 		em.MessageDelta(&stop, shared.ClaudeUsage(shared.ClampSubtract(int64(in), cacheRead, cacheWrite), int64(out), cacheRead, cacheWrite)),
 		em.MessageStop(),
@@ -984,30 +741,18 @@ func (sc *StreamConverter) claudeChunks() shared.ClaudeEventEmitter {
 // the text block is marked closed so a later text delta reopens a fresh
 // block (stop/reopen parity with the Chat Completions route).
 func (sc *StreamConverter) closeOpenBlocks() [][]byte {
-	if len(sc.openBlocks) == 0 {
-		return nil
-	}
-	em := sc.claudeChunks()
-	var out [][]byte
-	for _, idx := range sc.openBlocks {
-		out = append(out, em.ContentBlockStop(idx))
-	}
-	sc.openBlocks = nil
-	if sc.textOpen {
+	if sc.messages.blocks.Active("text") {
 		for key, part := range sc.textParts {
-			if part.block == sc.textIndex {
+			if part.block == sc.messages.blocks.Index() {
 				part.closed = true
 				if len(part.pending) > 0 {
-					sc.respTools.Report("responses", "messages", "output."+key+".annotations.closed_block", false)
+					sc.context.Report("responses", "messages", "output."+key+".annotations.closed_block", false)
 					part.pending = nil
 				}
 			}
 		}
 	}
-
-	sc.textOpen = false
-	sc.reasonOpen = false
-	return out
+	return sc.messages.blocks.Close(sc.claudeChunks())
 }
 
 // argsDelta renders one input_json_delta content block delta.
@@ -1053,125 +798,6 @@ type reasoningEvent struct {
 	Text         string `json:"text"`
 }
 
-// Complete part/item/terminal snapshots fill missing tails without replaying
-// text already delivered as deltas. Summary and content use separate keys.
-func (sc *StreamConverter) reasoningSnapshot(item functionCallItem) [][]byte {
-	var events [][]byte
-	for i, p := range item.Summary {
-		if p.Type == "summary_text" {
-			events = append(events, sc.reasoningPart(fmt.Sprintf("%s/summary/%d", item.ID, i), p.Text, true)...)
-		}
-	}
-	for i, p := range item.Content {
-		if p.Type == "reasoning_text" || p.Type == "text" {
-			events = append(events, sc.reasoningPart(fmt.Sprintf("%s/content/%d", item.ID, i), p.Text, true)...)
-		}
-	}
-	return events
-}
-
-func (sc *StreamConverter) reasoningPart(key, text string, complete bool) [][]byte {
-	if sc.reasoningParts == nil {
-		sc.reasoningParts = map[string]*strings.Builder{}
-	}
-	part := sc.reasoningParts[key]
-	if part == nil {
-		part = &strings.Builder{}
-		sc.reasoningParts[key] = part
-	}
-	if complete {
-		previous := part.String()
-		if !strings.HasPrefix(text, previous) {
-			return nil
-		}
-		text = text[len(previous):]
-	}
-	if text == "" {
-		return nil
-	}
-	part.WriteString(text)
-	if sc.source == "chat-completions" {
-		return [][]byte{sc.chatChunks().Delta(map[string]any{"reasoning_content": text})}
-	}
-	return sc.queueMessagesContent("reasoning", text)
-}
-
-// Text/refusal done and item/terminal snapshots can carry the full content
-// without deltas. Separate per-part accumulation prevents duplicate output.
-func (sc *StreamConverter) visiblePart(id string, index int, refused bool, text string, complete bool) ([][]byte, bool, *errclass.Error) {
-	key := fmt.Sprintf("%s/%d/%t", id, index, refused)
-	owner := sc.textPart(key)
-	part := &owner.text
-	if complete {
-		previous := part.String()
-		if !strings.HasPrefix(text, previous) {
-			return nil, false, nil
-		}
-		text = text[len(previous):]
-	}
-	if text == "" {
-		return nil, false, nil
-	}
-	if owner.base < 0 {
-		owner.base = sc.textRunes
-	}
-	if owner.text.Len() > 0 && sc.lastTextPart != "" && sc.lastTextPart != key {
-		owner.interleaved = true
-	}
-	// Chat keeps refusals separate from content; only Messages renders them
-	// in its visible text and therefore includes them in citation offsets.
-	if !refused || sc.source == "messages" {
-		sc.textRunes += utf8.RuneCountInString(text)
-		sc.lastTextPart = key
-	}
-
-	part.WriteString(text)
-	if refused {
-		sc.refused = true
-		if sc.source == "chat-completions" {
-			return [][]byte{sc.chatChunks().Delta(map[string]any{"refusal": text})}, false, nil
-		}
-	}
-	if sc.source == "messages" {
-		sc.messagesQueue = append(sc.messagesQueue, messagesEmission{kind: "text", text: text, origin: key})
-		return sc.drainMessages(), false, nil
-	}
-	return sc.textDelta(text)
-}
-
-func (sc *StreamConverter) messageSnapshot(item functionCallItem) ([][]byte, bool, *errclass.Error) {
-	var events [][]byte
-	for i, part := range item.Content {
-		text := part.Text
-		if part.Type == "refusal" {
-			text = part.Refusal
-		} else if part.Type != "output_text" {
-			continue
-		}
-		more, _, eErr := sc.visiblePart(item.ID, i, part.Type == "refusal", text, true)
-		if eErr != nil {
-			return nil, false, eErr
-		}
-		events = append(events, more...)
-		var annotations []json.RawMessage
-		json.Unmarshal(part.Annotations, &annotations)
-		for _, raw := range annotations {
-			events = append(events, sc.annotation(item.ID, i, raw)...)
-		}
-	}
-	return events, false, nil
-}
-
-func (sc *StreamConverter) customArguments(id, delta string) string {
-	buffer := sc.customArgs[id]
-	if buffer == nil {
-		buffer = &strings.Builder{}
-		sc.customArgs[id] = buffer
-	}
-	buffer.WriteString(delta)
-	return buffer.String()
-}
-
 type visibleTextPart struct {
 	text         strings.Builder
 	base         int
@@ -1183,69 +809,6 @@ type visibleTextPart struct {
 	emittedRunes int
 }
 
-func (sc *StreamConverter) textPart(key string) *visibleTextPart {
-	if sc.textParts == nil {
-		sc.textParts = map[string]*visibleTextPart{}
-	}
-	part := sc.textParts[key]
-	if part == nil {
-		part = &visibleTextPart{base: -1, block: -1, citations: map[string]bool{}}
-		sc.textParts[key] = part
-	}
-	return part
-}
-func (sc *StreamConverter) annotation(id string, index int, raw json.RawMessage) [][]byte {
-	key := fmt.Sprintf("%s/%d/false", id, index)
-	return sc.annotationPart(key, raw)
-}
-func (sc *StreamConverter) annotationPart(key string, raw json.RawMessage) [][]byte {
-
-	part := sc.textPart(key)
-	if sc.source == "messages" && part.block < 0 {
-		part.pending = append(part.pending, append(json.RawMessage(nil), raw...))
-		return nil
-	}
-	base := part.base
-	if base < 0 {
-		base = sc.textRunes
-	}
-	c, ok := shared.ReadCitation(raw, "responses", sc.source, "output."+key+".annotations", part.text.String(), base, sc.respTools)
-	if !ok {
-		return nil
-	}
-	if part.interleaved {
-		c.Start = nil
-		c.End = nil
-		sc.respTools.Report("responses", sc.source, "output."+key+".annotations.offset", false)
-	}
-
-	// Source bytes may already include later queued fragments. Wait until the
-	// quoted range is actually delivered to this target block before consuming
-	// or deduplicating the annotation; retry it after every text fragment.
-	if sc.source == "messages" && sc.textOpen && part.block == sc.textIndex && !part.closed {
-		incompleteRange := c.End != nil && *c.End-base > part.emittedRunes
-		incompleteText := c.Text != "" && !strings.Contains(sc.messagesText.String(), c.Text)
-		if incompleteRange || incompleteText {
-			part.pending = append(part.pending, append(json.RawMessage(nil), raw...))
-			return nil
-		}
-	}
-	encoded, _ := json.Marshal(c.Wire(sc.source))
-	if part.citations[string(encoded)] {
-		return nil
-	}
-	part.citations[string(encoded)] = true
-	if sc.source == "chat-completions" {
-		return [][]byte{sc.chatChunks().Delta(map[string]any{"annotations": shared.CitationValues([]shared.Citation{c}, sc.source)})}
-	}
-	copyCitation := c
-	entry := messagesEmission{kind: "citation", origin: key, citation: &copyCitation}
-	if sc.draining {
-		return sc.messageCitation(entry)
-	}
-	sc.messagesQueue = append(sc.messagesQueue, entry)
-	return sc.drainMessages()
-}
 func validateOutputItem(item functionCallItem) *errclass.Error {
 	switch item.Type {
 	case "reasoning", "function_call", "custom_tool_call", "web_search_call":

@@ -1142,7 +1142,7 @@ func TestStreamResponses_ItemDoneEvents(t *testing.T) {
 }
 
 func TestStreamResponsesCustomToolCallRestored(t *testing.T) {
-	rt := shared.NewResponseTools()
+	rt := shared.NewConversionContext()
 	reqBody := `{"input":"hi","tools":[{"type":"custom","name":"exec"}]}`
 	if _, eErr := BuildRequest("m", "responses", []byte(reqBody), rt); eErr != nil {
 		t.Fatalf("BuildRequest: %v", eErr)
@@ -1195,7 +1195,7 @@ func TestStreamResponsesCustomToolCallRestored(t *testing.T) {
 // fragments below concatenate to {"input":"hello"}, so the client must
 // see only "hello" across its input deltas.
 func TestStreamResponsesCustomToolFragmentedDeltasDoNotLeakWrapper(t *testing.T) {
-	rt := shared.NewResponseTools()
+	rt := shared.NewConversionContext()
 	reqBody := `{"input":"hi","tools":[{"type":"custom","name":"exec"}]}`
 	if _, eErr := BuildRequest("m", "responses", []byte(reqBody), rt); eErr != nil {
 		t.Fatalf("BuildRequest: %v", eErr)
@@ -1226,7 +1226,7 @@ func TestStreamResponsesCustomToolFragmentedDeltasDoNotLeakWrapper(t *testing.T)
 }
 
 func TestStreamResponsesNamespaceRestored(t *testing.T) {
-	rt := shared.NewResponseTools()
+	rt := shared.NewConversionContext()
 	reqBody := `{"input":"hi","tools":[{"type":"namespace","name":"subagents","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object"}}]}]}`
 	if _, eErr := BuildRequest("m", "responses", []byte(reqBody), rt); eErr != nil {
 		t.Fatalf("BuildRequest: %v", eErr)

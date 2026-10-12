@@ -13,7 +13,7 @@ import (
 	"github.com/dillonzq/api-translator/internal/errclass"
 )
 
-type reasoningConverter func(string, int, []byte, ...*shared.ResponseTools) ([]byte, *errclass.Error)
+type reasoningConverter func(string, int, []byte, ...*shared.ConversionContext) ([]byte, *errclass.Error)
 
 func reasoningSSE(kind, body string) string { return "event: " + kind + "\ndata: " + body + "\n\n" }
 

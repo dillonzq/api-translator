@@ -113,7 +113,7 @@ func TestPassthroughVerbatimAndTerminal(t *testing.T) {
 }
 
 func TestPassthroughCustomToolCallRestored(t *testing.T) {
-	rt := shared.NewResponseTools()
+	rt := shared.NewConversionContext()
 	r := &shared.ResponsesRequest{Tools: []shared.RespTool{{Type: "custom", Name: "exec"}}}
 	if _, eErr := rt.Normalize(r, EndpointPath); eErr != nil {
 		t.Fatalf("Normalize: %v", eErr)
@@ -173,7 +173,7 @@ func TestPassthroughCustomToolCallRestored(t *testing.T) {
 }
 
 func TestPassthroughNonCustomToolUntouched(t *testing.T) {
-	rt := shared.NewResponseTools()
+	rt := shared.NewConversionContext()
 	r := &shared.ResponsesRequest{Tools: []shared.RespTool{{Type: "function", Name: "lookup"}}}
 	if _, eErr := rt.Normalize(r, EndpointPath); eErr != nil {
 		t.Fatalf("Normalize: %v", eErr)

@@ -1,4 +1,5 @@
 // Package responses implements Responses protocol conversion.
+
 package responses
 
 import (
@@ -21,14 +22,14 @@ const EndpointPath = "/v1/responses"
 // are not filtered or clamped.
 // Unknown formats are ClassUnsupported; malformed input is
 // ClassTranslation; messages are descriptive and redacted.
-func BuildRequest(upstreamModel string, sourceFormat string, sourceBody []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func BuildRequest(upstreamModel string, sourceFormat string, sourceBody []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	switch sourceFormat {
 	case "responses":
 		return shared.RewriteModelID(upstreamModel, sourceBody, "responses")
 	case "chat-completions":
-		return fromChatCompletions(upstreamModel, sourceBody, shared.ResponseToolContext(tools))
+		return fromChatCompletions(upstreamModel, sourceBody, shared.ContextOrNew(tools))
 	case "messages":
-		return fromClaudeMessages(upstreamModel, sourceBody, shared.ResponseToolContext(tools))
+		return fromClaudeMessages(upstreamModel, sourceBody, shared.ContextOrNew(tools))
 	default:
 		return nil, shared.UnsupportedFormat(sourceFormat, EndpointPath)
 	}
@@ -87,7 +88,6 @@ func respToolChoice(kind, name string) json.RawMessage {
 }
 
 // ---- Chat Completions source -------------------------------------------
-
 // contentParts normalizes an OpenAI-style content field (JSON string or
 // typed parts) into Responses input parts for the given role (FR-005
 // multimodal preservation). The shared kernel owns validation and the
@@ -138,7 +138,7 @@ func contentParts(raw json.RawMessage, role string) ([]map[string]any, *errclass
 // equivalent (logprobs, frequency_penalty, presence_penalty, n, seed,
 // response_format, logit_bias) via struct selection. Tool calls and
 // reasoning controls are never dropped silently.
-func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	var src shared.ChatCompletionsRequest
 	if err := json.Unmarshal(body, &src); err != nil {
 		return nil, errclass.Translation("malformed openai request JSON: " + err.Error())
@@ -247,7 +247,7 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Respo
 			Strict:      t.Function.Strict,
 		})
 	}
-	format, err := shared.ConvertOutputFormat("chat-completions", "responses", src.ResponseFormat, shared.ResponseToolContext(ctx))
+	format, err := shared.ConvertOutputFormat("chat-completions", "responses", src.ResponseFormat, shared.ContextOrNew(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +257,6 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Respo
 }
 
 // ---- Claude Messages source --------------------------------------------
-
 // fromClaudeMessages translates an Anthropic Messages request into a
 // Responses request (FR-005, AC §D): system becomes instructions, text/
 // image blocks become input parts, tool_use/tool_result become
@@ -275,7 +274,7 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Respo
 // silently lost (FR-005). The tool_result is_error flag has no Responses
 // field and is preserved as an "[error] " marker in the output text rather
 // than lost silently.
-func fromClaudeMessages(upstreamModel string, body []byte, ctx ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func fromClaudeMessages(upstreamModel string, body []byte, ctx ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	src, eErr := shared.DecodeClaudeMessages(body)
 	if eErr != nil {
 		return nil, eErr
@@ -406,7 +405,7 @@ func fromClaudeMessages(upstreamModel string, body []byte, ctx ...*shared.Respon
 			Strict:      t.Strict,
 		})
 	}
-	format, err := shared.ConvertOutputFormat("messages", "responses", src.OutputConfig, shared.ResponseToolContext(ctx))
+	format, err := shared.ConvertOutputFormat("messages", "responses", src.OutputConfig, shared.ContextOrNew(ctx))
 	if err != nil {
 		return nil, err
 	}

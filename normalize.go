@@ -15,5 +15,5 @@ func NormalizeResponsesRequest(payload []byte, state *RequestState) ([]byte, *Er
 	if state == nil {
 		return nil, Translation("Responses tool normalization requires request state")
 	}
-	return shared.NormalizeResponsesRequest(payload, toolState(state))
+	return shared.NormalizeResponsesRequest(payload, conversionContext(state))
 }

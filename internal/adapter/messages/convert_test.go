@@ -429,7 +429,7 @@ func TestConvertMessagesAggregatedTextVerbatim(t *testing.T) {
 }
 
 func TestConvertMessagesToResponsesNamespaceRestored(t *testing.T) {
-	rt := shared.NewResponseTools()
+	rt := shared.NewConversionContext()
 	reqBody := `{"input":"hi","tools":[{"type":"namespace","name":"subagents","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object"}}]}]}`
 	if _, eErr := BuildRequest("m", "responses", []byte(reqBody), rt); eErr != nil {
 		t.Fatalf("BuildRequest: %v", eErr)

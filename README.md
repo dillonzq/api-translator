@@ -171,6 +171,8 @@ Structured output, tools, citations, search, termination rules, and remaining li
 
 ## Development and validation
 
+See [code structure and maintenance](docs/architecture.md) for module responsibilities and state contracts.
+
 ```sh
 go test -race ./...
 go vet ./...

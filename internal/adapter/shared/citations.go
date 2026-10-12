@@ -23,7 +23,7 @@ func intField(raw json.RawMessage) *int {
 	}
 	return nil
 }
-func ReadCitation(raw json.RawMessage, from, to, path, text string, offset int, state *ResponseTools) (Citation, bool) {
+func ReadCitation(raw json.RawMessage, from, to, path, text string, offset int, state *ConversionContext) (Citation, bool) {
 	var doc map[string]json.RawMessage
 	if json.Unmarshal(raw, &doc) != nil || doc == nil {
 		state.Record(DiagnosticFor(from, to, path, false))
@@ -100,7 +100,7 @@ func (c Citation) Wire(to string) map[string]any {
 	return out
 }
 
-func DecodeCitations(raw json.RawMessage, from, to, path, text string, offset int, ctx *ResponseTools) []Citation {
+func DecodeCitations(raw json.RawMessage, from, to, path, text string, offset int, ctx *ConversionContext) []Citation {
 	var list []json.RawMessage
 	json.Unmarshal(raw, &list)
 	var out []Citation

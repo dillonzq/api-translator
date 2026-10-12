@@ -384,7 +384,7 @@ func TestShellRequestFailurePreservesIdentities(t *testing.T) {
 			if _, err := ConvertRequest(target, "m", FormatResponses, []byte(request), state); err == nil {
 				t.Fatalf("accepted invalid request: %s", request)
 			}
-			if toolState(state).IsShell("shell") || toolState(state).IsCustom("n__run") || !toolState(state).IsCustom("existing") {
+			if conversionContext(state).IsShell("shell") || conversionContext(state).IsCustom("n__run") || !conversionContext(state).IsCustom("existing") {
 				t.Fatal("failed request changed existing tool identities")
 			}
 			// A corrected retry using an ordinary function must keep that identity.
@@ -401,7 +401,7 @@ func TestShellRequestFailurePreservesIdentities(t *testing.T) {
 		if _, err := ConvertRequest(target, "m", FormatResponses, []byte(shellRequest), state); err != nil {
 			t.Fatal(err)
 		}
-		if !toolState(state).IsShell("shell") {
+		if !conversionContext(state).IsShell("shell") {
 			t.Fatal("successful conversion did not commit shell identity")
 		}
 	}
@@ -457,7 +457,7 @@ func TestShellLocalSkills(t *testing.T) {
 			state.Options.LossPolicy = policy
 			request := strings.Replace(shellRequest, `"type":"local"`, `"type":"local","skills":[]`, 1)
 			body, err := convert(request, state)
-			if err != nil || !toolState(state).IsShell("shell") || strings.Contains(string(body), `"skills"`) {
+			if err != nil || !conversionContext(state).IsShell("shell") || strings.Contains(string(body), `"skills"`) {
 				t.Fatalf("%s/%s empty skills: %s %v", target, policy, body, err)
 			}
 			for _, skills := range []string{`[{}]`, `"invalid"`, `null`, `{}`, `false`, `42`} {
@@ -467,7 +467,7 @@ func TestShellLocalSkills(t *testing.T) {
 				if _, err := convert(bad, state); err == nil {
 					t.Fatalf("%s/%s accepted skills %s", target, policy, skills)
 				}
-				if toolState(state).IsShell("shell") {
+				if conversionContext(state).IsShell("shell") {
 					t.Fatal("unsupported skills committed shell identity")
 				}
 			}
@@ -477,7 +477,7 @@ func TestShellLocalSkills(t *testing.T) {
 	state := NewRequestState()
 	request := `{"input":[{"type":"additional_tools","tools":[{"type":"shell","environment":{"type":"local","skills":[]}}]},{"type":"shell_call","call_id":"c1","environment":{"type":"local","skills":[]},"action":{"commands":["pwd"]}}]}`
 	body, err := NormalizeResponsesRequest([]byte(request), state)
-	if err != nil || !toolState(state).IsShell("shell") || strings.Contains(string(body), `"environment"`) {
+	if err != nil || !conversionContext(state).IsShell("shell") || strings.Contains(string(body), `"environment"`) {
 		t.Fatalf("additional tools/history: %s %v", body, err)
 	}
 }
@@ -812,7 +812,7 @@ func TestShellActionRejectsUnknownProperties(t *testing.T) {
 		} else {
 			_, err = ConvertRequest(target, "m", FormatResponses, []byte(request), state)
 		}
-		if err == nil || err.Class != ClassTranslation || toolState(state).IsShell("shell") {
+		if err == nil || err.Class != ClassTranslation || conversionContext(state).IsShell("shell") {
 			t.Fatalf("%s accepted invalid history: %v", target, err)
 		}
 	}
@@ -845,7 +845,7 @@ func TestShellHistoryRejectsNullSkills(t *testing.T) {
 			} else {
 				_, err = ConvertRequest(target, "m", FormatResponses, []byte(source), state)
 			}
-			if err == nil || err.Class != ClassTranslation || toolState(state).IsShell("shell") {
+			if err == nil || err.Class != ClassTranslation || conversionContext(state).IsShell("shell") {
 				t.Fatalf("%s accepted null skills: %v", target, err)
 			}
 		}
@@ -876,7 +876,7 @@ func TestShellRejectsConflictingCustomHistory(t *testing.T) {
 				if err == nil || err.Class != ClassTranslation || out != nil {
 					t.Fatalf("%s/%s accepted conflicting custom shell history: %s %v", target, policy, out, err)
 				}
-				if toolState(state).IsShell("shell") || !toolState(state).IsCustom("existing") {
+				if conversionContext(state).IsShell("shell") || !conversionContext(state).IsCustom("existing") {
 					t.Fatal("rejected history changed tool identities")
 				}
 			}
@@ -895,7 +895,7 @@ func TestShellPreservesNamespacedCustomHistory(t *testing.T) {
 		} else {
 			out, err = ConvertRequest(target, "m", FormatResponses, source, state)
 		}
-		if err != nil || !strings.Contains(string(out), `"name":"old__shell"`) || !toolState(state).IsShell("shell") || !toolState(state).IsCustom("old__shell") {
+		if err != nil || !strings.Contains(string(out), `"name":"old__shell"`) || !conversionContext(state).IsShell("shell") || !conversionContext(state).IsCustom("old__shell") {
 			t.Fatalf("%s lost distinct namespaced history: %s %v", target, out, err)
 		}
 		body := []byte(`{"id":"r","object":"response","status":"completed","output":[{"type":"function_call","call_id":"old1","name":"old__shell","arguments":"{\"input\":\"echo old\"}"}]}`)

@@ -47,7 +47,7 @@ func TestConvertResponsesPassthrough(t *testing.T) {
 }
 
 func TestConvertResponsesPassthroughCustomToolRestored(t *testing.T) {
-	rt := shared.NewResponseTools()
+	rt := shared.NewConversionContext()
 	r := &shared.ResponsesRequest{Tools: []shared.RespTool{{Type: "custom", Name: "exec"}}}
 	if _, eErr := rt.Normalize(r, EndpointPath); eErr != nil {
 		t.Fatalf("Normalize: %v", eErr)

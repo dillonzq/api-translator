@@ -434,7 +434,7 @@ func TestMessagesToolArgumentsRemainOpenUntilCompletion(t *testing.T) {
 	}
 }
 
-func TestArgumentsDoneWaitsForToolIdentity(t *testing.T) {
+func TestArgumentsDoneWaitsForIdentity(t *testing.T) {
 	for _, target := range []string{"chat-completions", "messages"} {
 		for _, identity := range []string{"added-empty", "item-done", "terminal"} {
 			t.Run(target+"/"+identity, func(t *testing.T) {

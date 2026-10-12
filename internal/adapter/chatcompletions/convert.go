@@ -43,33 +43,33 @@ type ccResponse struct {
 }
 
 // ConvertNonStreamResponse translates an upstream Chat Completions HTTP
-// response back into the client protocol sourceFormat (FR-006, AC §B).
+// response back into the client protocol outputFormat (FR-006, AC §B).
 // Statuses >= 400 become classified redacted errors (§7); "chat-completions"
 // passes through; "messages" and "responses" are converted,
 // preserving text, tool calls, finish reason, and usage. Unknown formats
 // are ClassUnsupported; malformed upstream bodies are ClassTranslation.
-func ConvertNonStreamResponse(sourceFormat string, status int, upstreamBody []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func ConvertNonStreamResponse(outputFormat string, status int, upstreamBody []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	if status >= 400 {
 		return nil, shared.UpstreamStatusError(status, upstreamBody)
 	}
 	if err := shared.CheckProtocolFailure(upstreamBody, "chat-completions"); err != nil {
 		return nil, err
 	}
-	if sourceFormat != "chat-completions" {
-		shared.ResponseToolContext(tools).RecordResponseLosses("chat-completions", sourceFormat, upstreamBody)
+	if outputFormat != "chat-completions" {
+		shared.ContextOrNew(tools).RecordResponseLosses("chat-completions", outputFormat, upstreamBody)
 	}
-	switch sourceFormat {
+	switch outputFormat {
 	case "chat-completions":
 		return passthroughResponse(upstreamBody)
 	case "messages":
 		return chatToClaude(upstreamBody, tools...)
 	case "responses":
-		if err := shared.ValidateShellResponse(upstreamBody, "chat-completions", shared.ResponseToolContext(tools)); err != nil {
+		if err := shared.ValidateShellResponse(upstreamBody, "chat-completions", shared.ContextOrNew(tools)); err != nil {
 			return nil, err
 		}
 		return chatToResponses(upstreamBody, tools...)
 	default:
-		return nil, shared.UnsupportedFormat(sourceFormat, EndpointPath)
+		return nil, shared.UnsupportedFormat(outputFormat, EndpointPath)
 	}
 }
 
@@ -97,13 +97,12 @@ func passthroughResponse(body []byte) ([]byte, *errclass.Error) {
 }
 
 // ---- Chat Completions -> claude (Anthropic Messages) (FR-006) ----
-
 // chatToClaude converts a Chat Completions result into a Messages
 // response via the shared Claude-result kernel: content becomes text or
 // image blocks, tool_calls become tool_use blocks, finish_reason maps to
 // stop_reason, and prompt/completion token counts map to input/output
 // usage (FR-006, AC §B).
-func chatToClaude(body []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func chatToClaude(body []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	resp, eErr := decodeCC(body)
 	if eErr != nil {
 		return nil, eErr
@@ -138,7 +137,7 @@ func chatToClaude(body []byte, tools ...*shared.ResponseTools) ([]byte, *errclas
 		"tool_use", shared.FinishToClaudeStop(shared.FinishWithRefusal(choice.FinishReason, choice.Message.Refusal != "")))
 	var text string
 	json.Unmarshal(choice.Message.Content, &text)
-	shared.AddBlockCitations(blocks, shared.DecodeCitations(choice.Message.Annotations, "chat-completions", "messages", "choices[0].message.annotations", text, 0, shared.ResponseToolContext(tools)))
+	shared.AddBlockCitations(blocks, shared.DecodeCitations(choice.Message.Annotations, "chat-completions", "messages", "choices[0].message.annotations", text, 0, shared.ContextOrNew(tools)))
 	b, _ := json.Marshal(shared.NewClaudeResult(resp.ID, resp.Model, stop,
 		shared.ClampSubtract(inputTokens, cacheRead, cacheWrite), outputTokens, cacheRead, cacheWrite, append(blocks, toolUse...)))
 	return b, nil // only marshallable composed types; cannot fail
@@ -146,7 +145,6 @@ func chatToClaude(body []byte, tools ...*shared.ResponseTools) ([]byte, *errclas
 
 // claudeStopReason was replaced by shared.FinishToClaudeStop, which adds
 // the missing content_filter→refusal leg so stop reasons round-trip.
-
 // ccContentToBlocks normalizes response content into Anthropic blocks
 // via the shared kernel, which owns validation and the empty-input
 // policy (FR-006 multimodal preservation). Responses-flavored alias part
@@ -182,13 +180,12 @@ func claudeToolUseBlocks(calls []shared.CCToolCall) ([]claudeBlock, *errclass.Er
 }
 
 // ---- Chat Completions -> Responses (Responses) (FR-006) ----
-
 // chatToResponses converts a Chat Completions result into Responses
 // output items: text content becomes an assistant output_text message
 // item, tool_calls become function_call items, finish_reason length maps
 // to status incomplete, and prompt/completion tokens map to input/output
 // usage (FR-006).
-func chatToResponses(body []byte, tools ...*shared.ResponseTools) ([]byte, *errclass.Error) {
+func chatToResponses(body []byte, tools ...*shared.ConversionContext) ([]byte, *errclass.Error) {
 	resp, eErr := decodeCC(body)
 	if eErr != nil {
 		return nil, eErr
@@ -227,7 +224,7 @@ func chatToResponses(body []byte, tools ...*shared.ResponseTools) ([]byte, *errc
 	}
 	var text string
 	json.Unmarshal(choice.Message.Content, &text)
-	oa.AddCitations(shared.DecodeCitations(choice.Message.Annotations, "chat-completions", "responses", "choices[0].message.annotations", text, 0, shared.ResponseToolContext(tools)))
+	oa.AddCitations(shared.DecodeCitations(choice.Message.Annotations, "chat-completions", "responses", "choices[0].message.annotations", text, 0, shared.ContextOrNew(tools)))
 	oa.AddRefusal(choice.Message.Refusal)
 	for _, tc := range choice.Message.ToolCalls {
 		oa.AppendFunctionCall(tc.ID, tc.Function.Name, shared.DefaultArgs(tc.Function.Arguments))

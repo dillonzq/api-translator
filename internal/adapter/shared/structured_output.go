@@ -2,12 +2,13 @@ package shared
 
 import (
 	"encoding/json"
+
 	"github.com/dillonzq/api-translator/internal/errclass"
 )
 
 // ConvertOutputFormat parses one source control and renders the target field.
 // It never reparses or mutates a converted request envelope.
-func ConvertOutputFormat(from, to string, raw json.RawMessage, ctx *ResponseTools) (json.RawMessage, *errclass.Error) {
+func ConvertOutputFormat(from, to string, raw json.RawMessage, ctx *ConversionContext) (json.RawMessage, *errclass.Error) {
 	key := "response_format"
 	if from == FormatResponses {
 		key = "text"
@@ -83,7 +84,7 @@ func readOutputFormat(from string, source map[string]json.RawMessage) (map[strin
 	}
 	return format, nil
 }
-func writeOutputFormat(to string, format map[string]json.RawMessage, target map[string]json.RawMessage, state *ResponseTools, from string) *errclass.Error {
+func writeOutputFormat(to string, format map[string]json.RawMessage, target map[string]json.RawMessage, state *ConversionContext, from string) *errclass.Error {
 	var typ string
 	json.Unmarshal(format["type"], &typ)
 	if typ == "text" {

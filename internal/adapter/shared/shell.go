@@ -178,7 +178,7 @@ func shellHistory(item rawObject) *errclass.Error {
 
 // normalizeShellDocument only emulates local shell. Hosted environments stay
 // native so cross-protocol adapters reject them instead of executing locally.
-func normalizeShellDocument(doc rawObject, state *ResponseTools) (bool, *errclass.Error) {
+func normalizeShellDocument(doc rawObject, state *ConversionContext) (bool, *errclass.Error) {
 	var tools []rawObject
 	if HasContent(doc["tools"]) && json.Unmarshal(doc["tools"], &tools) != nil {
 		return false, errclass.Translation("tools must be an array of objects")
@@ -240,7 +240,7 @@ func normalizeShellDocument(doc rawObject, state *ResponseTools) (bool, *errclas
 		}
 	}
 	id := responseToolIdentity{name: ShellFunctionName, isShell: true}
-	if prev, ok := state.names[ShellFunctionName]; ok && prev != id {
+	if prev, ok := state.Tools.names[ShellFunctionName]; ok && prev != id {
 		return false, errclass.Translation("shell function name collides with another tool")
 	}
 	var rewriteTools func([]rawObject) *errclass.Error
@@ -321,16 +321,16 @@ func normalizeShellDocument(doc rawObject, state *ResponseTools) (bool, *errclas
 	if array {
 		doc["input"], _ = json.Marshal(items)
 	}
-	if state.names == nil {
-		state.names = make(map[string]responseToolIdentity)
+	if state.Tools.names == nil {
+		state.Tools.names = make(map[string]responseToolIdentity)
 	}
-	state.names[ShellFunctionName] = id
+	state.Tools.names[ShellFunctionName] = id
 	return true, nil
 }
 
 // NormalizeShellRequest adapts shell declarations and history before the
 // existing typed cross-protocol converters decode the request.
-func NormalizeShellRequest(body []byte, state *ResponseTools) ([]byte, *errclass.Error) {
+func NormalizeShellRequest(body []byte, state *ConversionContext) ([]byte, *errclass.Error) {
 	var doc rawObject
 	if json.Unmarshal(body, &doc) != nil || doc == nil {
 		return nil, errclass.Translation("Responses request requires a JSON object")
@@ -348,7 +348,7 @@ func NormalizeShellRequest(body []byte, state *ResponseTools) ([]byte, *errclass
 
 // ValidateShellResponse ensures incomplete or malformed function arguments
 // cannot silently escape as ordinary function calls on the restoration path.
-func ValidateShellResponse(body []byte, format string, state *ResponseTools) *errclass.Error {
+func ValidateShellResponse(body []byte, format string, state *ConversionContext) *errclass.Error {
 	var doc rawObject
 	if json.Unmarshal(body, &doc) != nil {
 		return nil
