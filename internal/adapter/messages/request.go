@@ -22,6 +22,7 @@ type anthropicMessage struct {
 }
 
 type anthropicTool struct {
+	CacheControl   json.RawMessage `json:"cache_control,omitempty"`
 	Name           string          `json:"name"`
 	Description    string          `json:"description,omitempty"`
 	InputSchema    json.RawMessage `json:"input_schema,omitempty"`
@@ -278,9 +279,10 @@ func systemField(parts []string) any {
 // roles are "user" (tool_result + later user text in one turn) — the
 // Messages contract rejects consecutive same-role messages.
 type msgBuilder struct {
-	curKey string
-	cur    *anthropicMessage
-	msgs   []anthropicMessage
+	blocksAdded int
+	curKey      string
+	cur         *anthropicMessage
+	msgs        []anthropicMessage
 }
 
 func (b *msgBuilder) add(key, role string, block anthropicBlock) {
@@ -290,6 +292,7 @@ func (b *msgBuilder) add(key, role string, block anthropicBlock) {
 		b.curKey = key
 	}
 	b.cur.Content = append(b.cur.Content.([]anthropicBlock), block)
+	b.blocksAdded++
 }
 
 func (b *msgBuilder) flush() {
@@ -297,7 +300,7 @@ func (b *msgBuilder) flush() {
 		return
 	}
 	blocks := b.cur.Content.([]anthropicBlock)
-	if len(blocks) == 1 && blocks[0]["type"] == "text" {
+	if len(blocks) == 1 && blocks[0]["type"] == "text" && blocks[0]["cache_control"] == nil {
 		b.cur.Content = blocks[0]["text"]
 	}
 	b.msgs = append(b.msgs, *b.cur)
@@ -310,7 +313,9 @@ func (b *msgBuilder) flush() {
 // Levels with no numeric equivalent fail explicitly, and upstream validates
 // the resulting controls.
 func finalize(req *messagesRequest, system []string, effort string) ([]byte, *errclass.Error) {
-	req.System = systemField(system)
+	if req.System == nil {
+		req.System = systemField(system)
+	}
 	if req.Messages == nil {
 		req.Messages = []anthropicMessage{}
 	}
@@ -378,9 +383,11 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Respo
 	req.StopSequences = stop
 
 	var system []string
+	var systemBlocks []anthropicBlock
 	var b msgBuilder
 	for i := range src.Messages {
 		m := &src.Messages[i]
+		start := b.blocksAdded
 		switch m.Role {
 		case "system", "developer":
 			blocks, eErr := contentParts(m.Content)
@@ -391,6 +398,8 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Respo
 				return nil, rejectNonText(blocks, true)
 			}
 			system = append(system, shared.JoinTexts(blocks))
+			applyCacheControl(blocks, m.CacheControl)
+			systemBlocks = append(systemBlocks, blocks...)
 		case "assistant":
 			blocks, eErr := contentParts(m.Content)
 			if eErr != nil {
@@ -399,8 +408,8 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Respo
 			if hasNonText(blocks) {
 				return nil, rejectNonText(blocks, false)
 			}
-			if text := shared.JoinTexts(blocks); text != "" {
-				b.add("assistant", "assistant", textBlock(text))
+			for _, block := range assistantTextBlocks(blocks) {
+				b.add("assistant", "assistant", block)
 			}
 			for _, tc := range m.ToolCalls {
 				input, eErr := shared.DecodeArgs(tc.Function.Arguments)
@@ -416,13 +425,11 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Respo
 			if eErr != nil {
 				return nil, eErr
 			}
-			content, eErr := toolResultContent(blocks)
+			block, eErr := toolResultBlock(m.ToolCallID, m.Content, blocks)
 			if eErr != nil {
 				return nil, eErr
 			}
-			b.add("user:tool", "user", anthropicBlock{
-				"type": "tool_result", "tool_use_id": m.ToolCallID, "content": content,
-			})
+			b.add("user:tool", "user", block)
 		case "user":
 			blocks, eErr := contentParts(m.Content)
 			if eErr != nil {
@@ -434,9 +441,13 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Respo
 		default:
 			return nil, shared.ValidateRole(m.Role, EndpointPath)
 		}
+		b.applyCacheSince(start, m.CacheControl)
 	}
 	b.flush()
 	req.Messages = b.msgs
+	if hasCacheControl(systemBlocks) {
+		req.System = systemBlocks
+	}
 
 	for _, t := range src.Tools {
 		if t.Type == "namespace" {
@@ -447,8 +458,9 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Respo
 		}
 		req.Tools = append(req.Tools, anthropicTool{
 			Name: t.Function.Name, Description: t.Function.Description,
-			InputSchema: shared.ObjectSchema(t.Function.Parameters),
-			Strict:      t.Function.Strict,
+			InputSchema:  shared.ObjectSchema(t.Function.Parameters),
+			Strict:       t.Function.Strict,
+			CacheControl: toolCacheControl(t),
 		})
 	}
 	kind, tcName, eErr := shared.DecodeToolChoice(src.ToolChoice)
@@ -490,12 +502,14 @@ func fromResponses(upstreamModel string, body []byte, tools *shared.ResponseTool
 	}
 
 	var system []string
+	var systemBlocks []anthropicBlock
 	instr, eErr := src.DecodeInstructions()
 	if eErr != nil {
 		return nil, eErr
 	}
 	if instr != "" {
 		system = append(system, instr)
+		systemBlocks = append(systemBlocks, textBlock(instr))
 	}
 
 	var b msgBuilder
@@ -504,6 +518,7 @@ func fromResponses(upstreamModel string, body []byte, tools *shared.ResponseTool
 		return nil, eErr
 	}
 	for _, item := range items {
+		start := b.blocksAdded
 		switch item.Type {
 		case "message":
 			blocks, eErr := contentParts(item.Content)
@@ -519,14 +534,16 @@ func fromResponses(upstreamModel string, body []byte, tools *shared.ResponseTool
 				if hasNonText(blocks) {
 					return nil, rejectNonText(blocks, false)
 				}
-				if text := shared.JoinTexts(blocks); text != "" {
-					b.add("assistant", "assistant", textBlock(text))
+				for _, block := range assistantTextBlocks(blocks) {
+					b.add("assistant", "assistant", block)
 				}
 			case "system", "developer":
 				if hasNonText(blocks) {
 					return nil, rejectNonText(blocks, true)
 				}
 				system = append(system, shared.JoinTexts(blocks))
+				applyCacheControl(blocks, item.CacheControl)
+				systemBlocks = append(systemBlocks, blocks...)
 			default:
 				return nil, shared.ValidateRole(item.Role, EndpointPath)
 			}
@@ -556,13 +573,11 @@ func fromResponses(upstreamModel string, body []byte, tools *shared.ResponseTool
 			if eErr != nil {
 				return nil, eErr
 			}
-			content, eErr := toolResultContent(blocks)
+			block, eErr := toolResultBlock(item.CallID, item.Output, blocks)
 			if eErr != nil {
 				return nil, eErr
 			}
-			b.add("user:tool", "user", anthropicBlock{
-				"type": "tool_result", "tool_use_id": item.CallID, "content": content,
-			})
+			b.add("user:tool", "user", block)
 		case "reasoning":
 			// Best-effort: keep summary text as a thinking block;
 			// encrypted_content has no Anthropic equivalent, so the
@@ -582,14 +597,18 @@ func fromResponses(upstreamModel string, body []byte, tools *shared.ResponseTool
 		default:
 			return nil, shared.UnsupportedInputItemType(item.Type)
 		}
+		b.applyCacheSince(start, item.CacheControl)
 	}
 	b.flush()
 	req.Messages = b.msgs
+	if hasCacheControl(systemBlocks) {
+		req.System = systemBlocks
+	}
 
 	for _, t := range src.Tools {
 		if shared.IsSearchTool(t.Type) {
 			mapped := shared.ResponseSearchTool(t)
-			req.Tools = append(req.Tools, anthropicTool{Type: mapped.Type, Name: mapped.Name, UserLocation: mapped.UserLocation, AllowedDomains: mapped.AllowedDomains})
+			req.Tools = append(req.Tools, anthropicTool{Type: mapped.Type, Name: mapped.Name, UserLocation: mapped.UserLocation, AllowedDomains: mapped.AllowedDomains, CacheControl: t.CacheControl})
 			continue
 		}
 		if eErr := shared.FunctionTool(t.Type, EndpointPath); eErr != nil {
@@ -597,7 +616,7 @@ func fromResponses(upstreamModel string, body []byte, tools *shared.ResponseTool
 		}
 		schema := shared.ObjectSchema(t.Parameters)
 		req.Tools = append(req.Tools, anthropicTool{
-			Name: t.Name, Description: t.Description, InputSchema: schema, Strict: t.Strict,
+			Name: t.Name, Description: t.Description, InputSchema: schema, Strict: t.Strict, CacheControl: t.CacheControl,
 		})
 	}
 	effort := ""

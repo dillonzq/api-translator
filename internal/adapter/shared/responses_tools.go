@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/dillonzq/api-translator/internal/errclass"
@@ -156,19 +157,27 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 	if eErr != nil {
 		return nil, eErr
 	}
+	// Keep original declaration paths even after additional_tools are merged.
+	toolPaths := make([]string, len(r.Tools))
+	for i := range r.Tools {
+		toolPaths[i] = fmt.Sprintf("tools[%d]", i)
+	}
 	var conv []RespItem
-	for _, item := range items {
+	for i, item := range items {
 		if item.Type == "additional_tools" {
 			if item.Tools == nil {
 				return nil, errclass.Translation("additional_tools requires a tools array")
 			}
 			r.Tools = append(r.Tools, item.Tools...)
+			for j := range item.Tools {
+				toolPaths = append(toolPaths, fmt.Sprintf("input[%d].tools[%d]", i, j))
+			}
 			continue
 		}
 		conv = append(conv, item)
 	}
 	var flat []RespTool
-	for _, tool := range r.Tools {
+	for i, tool := range r.Tools {
 		if tool.Type != "namespace" {
 			wasCustom := tool.Type == "custom"
 			if !normalizeCustomTool(&tool, target) {
@@ -191,7 +200,7 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 		if strings.TrimSpace(tool.Name) == "" || tool.Tools == nil {
 			return nil, errclass.Translation("namespace tool requires a name and tools array")
 		}
-		for _, child := range tool.Tools {
+		for j, child := range tool.Tools {
 			if IsSearchTool(child.Type) && target != "/v1/responses" {
 				continue
 			}
@@ -207,6 +216,14 @@ func (t *ResponseTools) Normalize(r *ResponsesRequest, target string) ([]RespIte
 			if prev, ok := t.names[qualified]; ok {
 				if prev != id {
 					return nil, errclass.Translation("Responses tool names collide after namespace conversion")
+				}
+				// The discarded declaration's hint has no outbound block. Report
+				// it where normalization actually removes it, not in preflight.
+				if target == "/v1/messages" && HasContent(child.CacheControl) {
+					path := fmt.Sprintf("%s.tools[%d].cache_control", toolPaths[i], j)
+					if err := t.RejectLoss(DiagnosticFor(FormatResponses, FormatMessages, path, false)); err != nil {
+						return nil, err
+					}
 				}
 				continue // duplicate identical declaration: first wins
 			}

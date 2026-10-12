@@ -115,11 +115,17 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 			if typ != "function" {
 				add(path, true)
 			}
+			if HasContent(tool["cache_control"]) && to != FormatMessages {
+				add(path+".cache_control", false)
+			}
 			var fn map[string]json.RawMessage
 			json.Unmarshal(tool["function"], &fn)
 			tool = fn
 		} else if from == FormatResponses {
 			if typ == "namespace" {
+				if HasContent(tool["cache_control"]) {
+					add(path+".cache_control", false)
+				}
 				var children []map[string]json.RawMessage
 				json.Unmarshal(tool["tools"], &children)
 				for i, child := range children {
@@ -167,7 +173,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 				add(path+"."+key, true)
 			}
 		}
-		if len(tool["cache_control"]) > 0 {
+		if HasContent(tool["cache_control"]) && to != FormatMessages {
 			add(path+".cache_control", false)
 		}
 	}
@@ -190,8 +196,23 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 			add(path, true)
 		}
 		for _, key := range []string{"cache_control", "signature"} {
-			if len(block[key]) > 0 {
+			lostCache := to != FormatMessages
+			if key == "cache_control" && to == FormatMessages {
+				var text string
+				json.Unmarshal(block["text"], &text)
+				lostCache = (typ == "text" || typ == "input_text" || typ == "output_text") && text == ""
+			}
+			if HasContent(block[key]) && (key != "cache_control" || lostCache) {
 				add(path+"."+key, false)
+			}
+		}
+	}
+	inspectToolResult := func(parts []map[string]json.RawMessage, path string) {
+		for j, part := range parts {
+			partPath := fmt.Sprintf("%s[%d]", path, j)
+			inspectBlock(part, partPath)
+			if to == FormatMessages && j != len(parts)-1 && HasContent(part["cache_control"]) {
+				add(partPath+".cache_control", false)
 			}
 		}
 	}
@@ -200,6 +221,20 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 		json.Unmarshal(doc["messages"], &messages)
 		for i, message := range messages {
 			path := fmt.Sprintf("messages[%d]", i)
+			var role string
+			json.Unmarshal(message["role"], &role)
+			if HasContent(message["cache_control"]) {
+				cacheLost := to != FormatMessages
+				if !cacheLost {
+					parts, _ := DecodeStringOrParts(message["content"], to)
+					var calls []json.RawMessage
+					json.Unmarshal(message["tool_calls"], &calls)
+					cacheLost = len(parts) == 0 && role != "tool" && !(role == "assistant" && len(calls) > 0)
+				}
+				if cacheLost {
+					add(path+".cache_control", false)
+				}
+			}
 			if from == FormatChatCompletions {
 				for _, key := range []string{"reasoning_content", "reasoning_details", "reasoning"} {
 					if len(message[key]) > 0 {
@@ -209,8 +244,12 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 			}
 			var blocks []map[string]json.RawMessage
 			json.Unmarshal(message["content"], &blocks)
-			for j, block := range blocks {
-				inspectBlock(block, fmt.Sprintf("%s.content[%d]", path, j))
+			if from == FormatChatCompletions && role == "tool" {
+				inspectToolResult(blocks, path+".content")
+			} else {
+				for j, block := range blocks {
+					inspectBlock(block, fmt.Sprintf("%s.content[%d]", path, j))
+				}
 			}
 		}
 		var system []map[string]json.RawMessage
@@ -233,14 +272,27 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 					add(path+".encrypted_content", true)
 				}
 			}
-			if typ == "message" {
+			if HasContent(item["cache_control"]) {
+				cacheLost := to != FormatMessages || typ == "reasoning" || typ == "additional_tools"
+				if !cacheLost && (typ == "message" || typ == "") {
+					parts, _ := DecodeStringOrParts(item["content"], to)
+					cacheLost = len(parts) == 0
+				}
+				if cacheLost {
+					add(path+".cache_control", false)
+				}
+			}
+			if typ == "message" || (typ == "" && HasContent(item["role"])) {
 				var parts []map[string]json.RawMessage
 				json.Unmarshal(item["content"], &parts)
 				for j, part := range parts {
-					if len(part["cache_control"]) > 0 {
-						add(fmt.Sprintf("%s.content[%d].cache_control", path, j), false)
-					}
+					inspectBlock(part, fmt.Sprintf("%s.content[%d]", path, j))
 				}
+			}
+			if typ == "function_call_output" || typ == "custom_tool_call_output" {
+				var parts []map[string]json.RawMessage
+				json.Unmarshal(item["output"], &parts)
+				inspectToolResult(parts, path+".output")
 			}
 			if typ == "additional_tools" {
 				var extra []map[string]json.RawMessage
