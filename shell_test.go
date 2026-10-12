@@ -338,6 +338,9 @@ func TestShellMessagesEOFAndInitialInput(t *testing.T) {
 		}
 		input := shellStream(FormatMessages)
 		cut := strings.Index(input, "event: message_stop")
+		if cut < 0 {
+			t.Fatal("fixture is missing the message_stop event")
+		}
 		input = input[:cut]
 		if !valid {
 			input = strings.ReplaceAll(input, "commands", "unknown")
@@ -417,7 +420,11 @@ func TestShellMessagesEmptyInitialObject(t *testing.T) {
 			converter, _ := NewStreamConverter(FormatMessages, FormatResponses, state)
 			input := strings.Replace(shellStream(FormatMessages), `"input":{}`, `"input":`+empty, 1)
 			if eof {
-				input = input[:strings.Index(input, "event: message_stop")]
+				cut := strings.Index(input, "event: message_stop")
+				if cut < 0 {
+					t.Fatal("fixture is missing the message_stop event")
+				}
+				input = input[:cut]
 			}
 			frames, done, err := converter.Feed([]byte(input))
 			if err != nil || done == eof {

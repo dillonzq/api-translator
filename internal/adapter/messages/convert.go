@@ -6,6 +6,7 @@
 package messages
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -153,14 +154,21 @@ func claudeToChat(body []byte, tools ...*shared.ConversionContext) ([]byte, *err
 
 // decodeBlockInput normalizes a tool_use input payload: absent/empty
 // decodes to an empty object so every tool_call carries valid arguments.
-// The raw bytes come from an already-validated outer document, so they are
-// always valid JSON.
+// The raw bytes come from an already-parsed document, so they are always
+// valid JSON; UseNumber keeps large integers and literals outside the
+// float64 range byte-exact instead of degrading them to null.
 func decodeBlockInput(raw json.RawMessage) any {
 	if !shared.HasContent(raw) {
 		return map[string]any{}
 	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var v any
-	json.Unmarshal(raw, &v)
+	if dec.Decode(&v) != nil {
+		// Unreachable for a valid JSON value; preserve the bytes rather than
+		// inventing an empty object if it ever happens.
+		return raw
+	}
 	return v
 }
 
@@ -212,7 +220,9 @@ func claudeToResponses(body []byte, tools ...*shared.ConversionContext) ([]byte,
 			var input struct {
 				Query string `json:"query"`
 			}
-			json.Unmarshal(blk.Input, &input)
+			if json.Unmarshal(blk.Input, &input) != nil {
+				return nil, errclass.Translation("invalid web search input")
+			}
 			call := &shared.HostedSearch{ID: blk.ID, Query: input.Query, Status: "in_progress"}
 			search[blk.ID] = call
 			item := call.ResponseItem()

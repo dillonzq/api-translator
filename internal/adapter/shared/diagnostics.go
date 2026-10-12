@@ -89,12 +89,12 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 		}
 	}
 	var tools []map[string]json.RawMessage
-	json.Unmarshal(doc["tools"], &tools)
+	DecodeProbe(doc["tools"], &tools)
 	var inspectTool func(map[string]json.RawMessage, string)
 	inspectTool = func(tool map[string]json.RawMessage, path string) {
 		var typ, name string
-		json.Unmarshal(tool["type"], &typ)
-		json.Unmarshal(tool["name"], &name)
+		DecodeProbe(tool["type"], &typ)
+		DecodeProbe(tool["name"], &name)
 		if from == FormatChatCompletions {
 			if typ != "function" {
 				add(path, true)
@@ -103,7 +103,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 				add(path+".cache_control", false)
 			}
 			var fn map[string]json.RawMessage
-			json.Unmarshal(tool["function"], &fn)
+			DecodeProbe(tool["function"], &fn)
 			tool = fn
 		} else if from == FormatResponses {
 			if typ == "namespace" {
@@ -111,10 +111,10 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 					add(path+".cache_control", false)
 				}
 				var children []map[string]json.RawMessage
-				json.Unmarshal(tool["tools"], &children)
+				DecodeProbe(tool["tools"], &children)
 				for i, child := range children {
 					var childType string
-					json.Unmarshal(child["type"], &childType)
+					DecodeProbe(child["type"], &childType)
 					if IsSearchTool(childType) {
 						add(fmt.Sprintf("%s.tools[%d]", path, i), true)
 					}
@@ -168,7 +168,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 	// schemas, and tool result payloads are business data, never traversed.
 	inspectBlock := func(block map[string]json.RawMessage, path string) {
 		var typ string
-		json.Unmarshal(block["type"], &typ)
+		DecodeProbe(block["type"], &typ)
 		if from == FormatMessages && typ == "document" {
 			for _, key := range []string{"context", "citations"} {
 				if HasContent(block[key]) {
@@ -183,7 +183,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 			lostCache := to != FormatMessages
 			if key == "cache_control" && to == FormatMessages {
 				var text string
-				json.Unmarshal(block["text"], &text)
+				DecodeProbe(block["text"], &text)
 				lostCache = (typ == "text" || typ == "input_text" || typ == "output_text") && text == ""
 			}
 			if HasContent(block[key]) && (key != "cache_control" || lostCache) {
@@ -202,17 +202,17 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 	}
 	if from == FormatMessages || from == FormatChatCompletions {
 		var messages []map[string]json.RawMessage
-		json.Unmarshal(doc["messages"], &messages)
+		DecodeProbe(doc["messages"], &messages)
 		for i, message := range messages {
 			path := fmt.Sprintf("messages[%d]", i)
 			var role string
-			json.Unmarshal(message["role"], &role)
+			DecodeProbe(message["role"], &role)
 			if HasContent(message["cache_control"]) {
 				cacheLost := to != FormatMessages
 				if !cacheLost {
 					parts, _ := DecodeStringOrParts(message["content"], to)
 					var calls []json.RawMessage
-					json.Unmarshal(message["tool_calls"], &calls)
+					DecodeProbe(message["tool_calls"], &calls)
 					cacheLost = len(parts) == 0 && role != "tool" && !(role == "assistant" && len(calls) > 0)
 				}
 				if cacheLost {
@@ -227,7 +227,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 				}
 			}
 			var blocks []map[string]json.RawMessage
-			json.Unmarshal(message["content"], &blocks)
+			DecodeProbe(message["content"], &blocks)
 			if from == FormatChatCompletions && role == "tool" {
 				inspectToolResult(blocks, path+".content")
 			} else {
@@ -237,17 +237,17 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 			}
 		}
 		var system []map[string]json.RawMessage
-		json.Unmarshal(doc["system"], &system)
+		DecodeProbe(doc["system"], &system)
 		for i, block := range system {
 			inspectBlock(block, fmt.Sprintf("system[%d]", i))
 		}
 	} else if from == FormatResponses {
 		var items []map[string]json.RawMessage
-		json.Unmarshal(doc["input"], &items)
+		DecodeProbe(doc["input"], &items)
 		for i, item := range items {
 			path := fmt.Sprintf("input[%d]", i)
 			var typ string
-			json.Unmarshal(item["type"], &typ)
+			DecodeProbe(item["type"], &typ)
 			if typ == "reasoning" {
 				if to == FormatChatCompletions {
 					add(path, true)
@@ -268,19 +268,19 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 			}
 			if typ == "message" || (typ == "" && HasContent(item["role"])) {
 				var parts []map[string]json.RawMessage
-				json.Unmarshal(item["content"], &parts)
+				DecodeProbe(item["content"], &parts)
 				for j, part := range parts {
 					inspectBlock(part, fmt.Sprintf("%s.content[%d]", path, j))
 				}
 			}
 			if typ == "function_call_output" || typ == "custom_tool_call_output" {
 				var parts []map[string]json.RawMessage
-				json.Unmarshal(item["output"], &parts)
+				DecodeProbe(item["output"], &parts)
 				inspectToolResult(parts, path+".output")
 			}
 			if typ == "additional_tools" {
 				var extra []map[string]json.RawMessage
-				json.Unmarshal(item["tools"], &extra)
+				DecodeProbe(item["tools"], &extra)
 				for j, tool := range extra {
 					inspectTool(tool, fmt.Sprintf("%s.tools[%d]", path, j))
 				}
@@ -293,7 +293,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 		kept   []string
 	}{{"reasoning", []string{"effort"}}, {"output_config", []string{"format", "effort"}}, {"text", []string{"format"}}} {
 		var obj map[string]json.RawMessage
-		json.Unmarshal(doc[pair.parent], &obj)
+		DecodeProbe(doc[pair.parent], &obj)
 		for k := range obj {
 			keep := false
 			for _, v := range pair.kept {
@@ -331,7 +331,7 @@ func (state *ConversionContext) CheckRequestLosses(from, to string, body []byte)
 
 func (state *ConversionContext) RecordResponseLosses(from, to string, body []byte) {
 	var doc map[string]json.RawMessage
-	json.Unmarshal(body, &doc)
+	DecodeProbe(body, &doc)
 	for _, key := range []string{"metadata", "service_tier", "system_fingerprint", "incomplete_details"} {
 		if len(doc[key]) > 0 {
 			state.Record(DiagnosticFor(from, to, key, false))
@@ -339,7 +339,7 @@ func (state *ConversionContext) RecordResponseLosses(from, to string, body []byt
 	}
 	if from == FormatChatCompletions {
 		var choices []map[string]json.RawMessage
-		json.Unmarshal(doc["choices"], &choices)
+		DecodeProbe(doc["choices"], &choices)
 		if len(choices) > 1 {
 			state.Record(DiagnosticFor(from, to, "choices[1:]", true))
 		}

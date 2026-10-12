@@ -41,17 +41,21 @@ func ProtocolFailure(e *ProtocolError, fallback string) *errclass.Error {
 func CheckProtocolFailure(body []byte, format string) *errclass.Error {
 	var doc map[string]json.RawMessage
 	if json.Unmarshal(body, &doc) != nil {
-		return nil
+		return nil //nolint:nilerr // an undecodable body carries no protocol error envelope
 	}
-	if raw := doc["error"]; len(raw) > 0 && string(raw) != "null" {
+	if raw := doc["error"]; len(raw) > 0 && string(raw) != "null" && string(raw) != `""` {
 		var e ProtocolError
-		if json.Unmarshal(raw, &e) == nil {
-			return ProtocolFailure(&e, "upstream response failed")
+		if json.Unmarshal(raw, &e) != nil {
+			// The envelope does not match the known shape. It is still a
+			// failure: an unreadable envelope must never read as success.
+			// An empty error string is ignored because it carries no detail.
+			return errclass.UpstreamFallback("upstream response failed")
 		}
+		return ProtocolFailure(&e, "upstream response failed")
 	}
 	if format == FormatResponses {
 		var status string
-		json.Unmarshal(doc["status"], &status)
+		DecodeProbe(doc["status"], &status)
 		if status == "failed" || status == "cancelled" {
 			return ProtocolFailure(nil, "Responses response "+status)
 		}

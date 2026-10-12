@@ -29,7 +29,7 @@ func TestBuildRequestUnsupportedFormat(t *testing.T) {
 
 func TestBuildRequestClaude(t *testing.T) {
 	body := []byte(`{"model":"opencode-go/minimax","max_tokens":10,"system":"s","stream":true}`)
-	out, eErr := BuildRequest("minimax", "messages", []byte(body))
+	out, eErr := BuildRequest("minimax", "messages", body)
 	if eErr != nil {
 		t.Fatalf("unexpected error: %v", eErr)
 	}

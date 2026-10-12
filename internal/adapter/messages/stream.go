@@ -204,12 +204,12 @@ type usageCounts struct {
 func (sc *StreamConverter) dispatchClaude(etype, data string, raw []byte, events *[][]byte) (bool, *errclass.Error) {
 	var payload map[string]any
 	if etype == "" && data != "" {
-		json.Unmarshal([]byte(data), &payload) // best-effort type probe
+		shared.DecodeProbe([]byte(data), &payload) // best-effort type probe
 		etype, _ = payload["type"].(string)
 	}
 	if etype == "message_delta" {
 		if payload == nil {
-			json.Unmarshal([]byte(data), &payload)
+			shared.DecodeProbe([]byte(data), &payload)
 		}
 		if delta, ok := payload["delta"].(map[string]any); ok {
 			if stop, ok := delta["stop_reason"].(string); ok && stop != "" {
@@ -219,7 +219,7 @@ func (sc *StreamConverter) dispatchClaude(etype, data string, raw []byte, events
 	}
 	if etype == "error" {
 		if payload == nil && data != "" {
-			json.Unmarshal([]byte(data), &payload)
+			shared.DecodeProbe([]byte(data), &payload)
 		}
 		return false, sseError(mget(payload, "error"))
 	}

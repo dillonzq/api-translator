@@ -32,7 +32,7 @@ func (sc *StreamConverter) dispatchResponses(etype string, ev *sseEvent, events 
 			var input struct {
 				Query string `json:"query"`
 			}
-			json.Unmarshal(ev.ContentBlock.Input, &input)
+			shared.DecodeProbe(ev.ContentBlock.Input, &input)
 			bs.search = &shared.HostedSearch{ID: bs.id, Query: input.Query, Status: "in_progress"}
 			sc.search[bs.id] = bs
 		}

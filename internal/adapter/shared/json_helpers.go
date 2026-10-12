@@ -49,3 +49,28 @@ func RewriteModelID(upstreamModel string, body []byte, formatLabel string) ([]by
 func HasContent(raw json.RawMessage) bool {
 	return len(raw) > 0 && string(raw) != "null"
 }
+
+// DecodeProbe decodes best-effort JSON into v and discards the error. Callers
+// use it only for probes whose bytes come from a document that was already
+// parsed: a shape mismatch leaves the fields v already holds, and that path
+// keeps the original bytes rather than rebuilding them from v. Code that turns
+// v into new output must call json.Unmarshal and handle the error; errcheck
+// still reports those call sites, because this helper is the only sanctioned
+// unchecked decode in the package.
+func DecodeProbe(data []byte, v any) {
+	_ = json.Unmarshal(data, v)
+}
+
+// StringField reads a JSON string field: an absent or null value reads as the
+// empty string, and any other JSON type reports ok=false. Callers that rewrite
+// the field must stop on ok=false, because substituting the empty string would
+// drop the upstream bytes.
+func StringField(raw json.RawMessage) (value string, ok bool) {
+	if !HasContent(raw) {
+		return "", true
+	}
+	if json.Unmarshal(raw, &value) != nil {
+		return "", false
+	}
+	return value, true
+}

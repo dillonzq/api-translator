@@ -17,19 +17,19 @@ type HostedSearch struct {
 
 func SearchFromResponse(item map[string]json.RawMessage) (HostedSearch, bool) {
 	var typ string
-	json.Unmarshal(item["type"], &typ)
+	DecodeProbe(item["type"], &typ)
 	if typ != "web_search_call" {
 		return HostedSearch{}, false
 	}
 	var s HostedSearch
-	json.Unmarshal(item["id"], &s.ID)
-	json.Unmarshal(item["status"], &s.Status)
+	DecodeProbe(item["id"], &s.ID)
+	DecodeProbe(item["status"], &s.Status)
 	var action struct {
 		Type    string              `json:"type"`
 		Query   string              `json:"query"`
 		Sources []map[string]string `json:"sources"`
 	}
-	json.Unmarshal(item["action"], &action)
+	DecodeProbe(item["action"], &action)
 	if action.Type != "" && action.Type != "search" {
 		return HostedSearch{}, false
 	}
@@ -76,8 +76,8 @@ func ReadSearchResults(s *HostedSearch, raw json.RawMessage, from, to, path stri
 	s.Status = "completed"
 	for i, result := range list {
 		var url, title string
-		json.Unmarshal(result["url"], &url)
-		json.Unmarshal(result["title"], &title)
+		DecodeProbe(result["url"], &url)
+		DecodeProbe(result["title"], &title)
 		if url != "" {
 			s.Sources = append(s.Sources, map[string]string{"type": "url", "url": url, "title": title})
 		}
@@ -98,7 +98,7 @@ func HostedChoice(raw json.RawMessage, to string) (json.RawMessage, *errclass.Er
 	var choice struct {
 		Type string `json:"type"`
 	}
-	json.Unmarshal(raw, &choice)
+	DecodeProbe(raw, &choice)
 	if choice.Type == "web_search" || choice.Type == "web_search_preview" {
 		if to == FormatChatCompletions {
 			return nil, UnsupportedHostedChoice()
@@ -131,7 +131,7 @@ func ResponseSearchTool(tool RespTool) ClaudeTool {
 		}
 	}
 	var filters map[string]json.RawMessage
-	json.Unmarshal(tool.Filters, &filters)
+	DecodeProbe(tool.Filters, &filters)
 	mapped.AllowedDomains = filters["allowed_domains"]
 	return mapped
 }

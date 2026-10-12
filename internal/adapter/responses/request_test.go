@@ -682,7 +682,7 @@ func TestFromChatCompletionsEffortSentinelsPreserved(t *testing.T) {
 // Explicit efforts forward without consulting model capability declarations.
 func TestFromChatCompletions_ReasoningEffortPassthroughWithoutValidation(t *testing.T) {
 	body := []byte(`{"messages":[],"reasoning_effort":"xhigh"}`)
-	out, eErr := BuildRequest("gpt-5", "chat-completions", []byte(body))
+	out, eErr := BuildRequest("gpt-5", "chat-completions", body)
 	if eErr != nil {
 		t.Fatalf("BuildRequest err = %+v, want nil (passthrough xhigh)", eErr)
 	}

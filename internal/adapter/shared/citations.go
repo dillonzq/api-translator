@@ -35,11 +35,11 @@ func ReadCitation(raw json.RawMessage, from, to, path, text string, offset int, 
 		}
 	}
 	var typ string
-	json.Unmarshal(doc["type"], &typ)
+	DecodeProbe(doc["type"], &typ)
 	c := Citation{}
 	if typ == "url_citation" {
 		if nested := doc["url_citation"]; len(nested) > 0 {
-			json.Unmarshal(nested, &doc)
+			DecodeProbe(nested, &doc)
 		}
 		c.Start = intField(doc["start_index"])
 		c.End = intField(doc["end_index"])
@@ -47,9 +47,9 @@ func ReadCitation(raw json.RawMessage, from, to, path, text string, offset int, 
 		state.Record(DiagnosticFor(from, to, path, false))
 		return c, false
 	}
-	json.Unmarshal(doc["url"], &c.URL)
-	json.Unmarshal(doc["title"], &c.Title)
-	json.Unmarshal(doc["cited_text"], &c.Text)
+	DecodeProbe(doc["url"], &c.URL)
+	DecodeProbe(doc["title"], &c.Title)
+	DecodeProbe(doc["cited_text"], &c.Text)
 	if c.URL == "" {
 		state.Record(DiagnosticFor(from, to, path, false))
 		return c, false
@@ -102,7 +102,14 @@ func (c Citation) Wire(to string) map[string]any {
 
 func DecodeCitations(raw json.RawMessage, from, to, path, text string, offset int, ctx *ConversionContext) []Citation {
 	var list []json.RawMessage
-	json.Unmarshal(raw, &list)
+	if json.Unmarshal(raw, &list) != nil {
+		if HasContent(raw) {
+			// A citations field that is not an array cannot be read per item;
+			// record the loss instead of dropping the references silently.
+			ctx.Record(DiagnosticFor(from, to, path, false))
+		}
+		return nil
+	}
 	var out []Citation
 	for i, item := range list {
 		if c, ok := ReadCitation(item, from, to, fmt.Sprintf("%s[%d]", path, i), text, offset, ctx); ok {
@@ -112,7 +119,7 @@ func DecodeCitations(raw json.RawMessage, from, to, path, text string, offset in
 	return out
 }
 func CitationValues(citations []Citation, to string) []map[string]any {
-	var out []map[string]any
+	out := make([]map[string]any, 0, len(citations))
 	for _, c := range citations {
 		out = append(out, c.Wire(to))
 	}
