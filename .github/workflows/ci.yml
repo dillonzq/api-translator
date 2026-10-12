@@ -7,6 +7,8 @@ on:
   pull_request:
   workflow_call:
   workflow_dispatch:
+  schedule:
+    - cron: "0 22 * * 0" # Monday 06:00 Asia/Shanghai; refresh vulnerability findings.
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -19,10 +21,7 @@ env:
   # Keep CI output stable: a missing or stale requirement fails instead of
   # being resolved silently, and `go mod tidy -diff` stays authoritative.
   GOFLAGS: -mod=readonly
-  # Pinned so a toolchain release cannot break an unrelated pull request; the
-  # vulnerability database itself is always fetched live.
-  GOVULNCHECK_VERSION: v1.9.0
-  ACTIONLINT_VERSION: v1.7.12
+  GOWORK: "off"
 
 jobs:
   lint:
@@ -31,36 +30,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
-      - name: Check formatting
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "::error::gofmt required for: $(echo "$unformatted" | tr '\n' ' ')"
-            exit 1
-          fi
-      - name: go vet
-        run: go vet ./...
-      - name: Check go.mod is tidy
-        run: go mod tidy -diff
-      - name: Check the dependency graph is standard library only
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Import allow-lists match by prefix, so a sibling module such as
-          # github.com/dillonzq/api-translator-extra slips past them. Resolving
-          # the package graph is exact: third-party module paths always have a
-          # dot in their first path element, standard library paths never do.
-          third_party="$(go list -deps ./... | grep -E '^[^/]*\.[^/]*/' | grep -vE '^github\.com/dillonzq/api-translator($|/)' || true)"
-          if [ -n "$third_party" ]; then
-            echo "::error::this module must depend on the standard library only"
-            printf '%s\n' "$third_party"
-            exit 1
-          fi
-          echo "dependency graph is standard library only"
+          cache-dependency-path: go.mod # No go.sum in this standard-library-only module.
+      - name: Check formatting, vet, module files, and dependencies
+        run: make fmt-check vet tidy-check deps
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
@@ -68,7 +46,7 @@ jobs:
           version: v2.14.0
           args: --timeout=5m
       - name: Lint workflows
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@${{ env.ACTIONLINT_VERSION }} -color
+        run: make workflow-lint
 
   test:
     name: test
@@ -76,17 +54,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: go.mod # No go.sum in this standard-library-only module.
       - name: Build
-        run: go build ./...
+        run: make build
       - name: Test with race detector, shuffled order, and coverage
-        shell: bash
-        run: |
-          set -o pipefail
-          go test -race -shuffle=on -count=1 -covermode=atomic -coverprofile=coverage.out ./... 2>&1 | tee test.log
+        run: make coverage
       - name: Write coverage summary
         if: always()
         shell: bash
@@ -96,7 +74,9 @@ jobs:
             echo "### Packages"
             echo
             echo '```'
-            grep -E '^(ok|FAIL|---)' test.log || true
+            if [ -f test.log ]; then
+              grep -E '^(ok|FAIL|---)' test.log || true
+            fi
             echo '```'
             if [ -f coverage.out ]; then
               echo "### Total coverage"
@@ -123,14 +103,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
-      - name: Fuzz SSE chunk boundaries
-        run: go test . -run '^$' -fuzz '^FuzzStreamChunkBoundaries$' -fuzztime=30s
-      - name: Fuzz SSE failure is terminal
-        run: go test . -run '^$' -fuzz '^FuzzSSEFailureIsTerminal$' -fuzztime=30s
+          cache-dependency-path: go.mod # No go.sum in this standard-library-only module.
+      - name: Fuzz stream boundaries and terminal failures
+        run: make fuzz
       - name: Upload failing inputs
         if: failure()
         uses: actions/upload-artifact@v7
@@ -148,9 +129,53 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: go.mod # No go.sum in this standard-library-only module.
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }} ./...
+        run: make vuln
+
+  compatibility:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
+      - name: Check native production and test dependencies
+        shell: bash
+        run: bash scripts/check-dependencies.sh
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test -shuffle=on -count=1 ./...
+
+  required:
+    name: CI passed
+    if: always()
+    needs: [lint, test, fuzz, vuln, compatibility]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every validation job to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          if ! jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"; then
+            echo "::error::One or more CI jobs failed, were cancelled, or were skipped"
+            exit 1
+          fi

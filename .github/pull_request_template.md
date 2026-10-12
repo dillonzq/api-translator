@@ -28,9 +28,9 @@
 
 ## Checklist
 
-- [ ] `go test -race -shuffle=on -count=1 ./...` passes
-- [ ] `gofmt -l .` is empty; `go vet ./...`, `go mod tidy -diff`, and `golangci-lint run` are clean
-- [ ] No new dependencies
+- [ ] `make check` passes (formatting, vet, module/dependency checks, build, and race tests)
+- [ ] `make lint` passes; workflow changes also pass `make workflow-lint`
+- [ ] No new production or test dependencies (`make deps`)
 - [ ] Output-producing decodes handle their error; documented best-effort probes use `shared.DecodeProbe` or `shared.StringField`
 - [ ] New losses are reported as `Diagnostic` values instead of being dropped silently, and their behavior under `LossPolicySafe` / `LossPolicyStrict` is intended
 - [ ] Snapshot changes (`testdata/conversion/`) are reviewed line by line and explained below

@@ -16,24 +16,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify:
-    uses: ./.github/workflows/ci.yml
-
-  release:
-    name: publish GitHub release
-    needs: verify
+  validate:
+    name: validate release tag
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write # create the release
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # full history for generated notes and the main check
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: go.mod
       - name: Validate the tag as a Go module version
         shell: bash
         env:
@@ -68,11 +64,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags --quiet "https://github.com/${GITHUB_REPOSITORY}.git" +refs/heads/main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/main; then
             echo "::error::${GITHUB_REF_NAME} does not point at a commit on main; releases are cut from main"
             exit 1
           fi
+
+  verify:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: publish GitHub release
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history for generated notes
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.mod
       - name: Create or confirm the release
         shell: bash
         env:
