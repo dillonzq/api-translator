@@ -53,7 +53,6 @@ type streamTool struct {
 	id            string
 	name          string
 	args          strings.Builder
-	stopped       bool // content_block_stop emitted
 	announced     bool
 	sent          int
 	customEmitted int // custom_tool_call_input bytes already emitted as deltas

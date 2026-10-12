@@ -14,17 +14,12 @@ type messagesOutput struct {
 	context          *shared.ConversionContext
 	blocks           shared.MessagesBlocks
 	pending          []messagesPending
-	activeTool       *streamTool
 	messagesText     strings.Builder
 	messagesTextBase int
 	messagesTextEnd  int
 }
 
 func (sc *messagesOutput) close() [][]byte {
-	if sc.activeTool != nil {
-		sc.activeTool.stopped = true
-		sc.activeTool = nil
-	}
 	return sc.blocks.Close(sc.emitter)
 }
 
@@ -54,9 +49,7 @@ func (sc *messagesOutput) drain(complete bool) ([][]byte, *errclass.Error) {
 				var opening [][]byte
 				t.blockIndex, opening = sc.blocks.Start(sc.emitter, "tool_use", map[string]any{"id": t.id, "name": t.name, "input": map[string]any{}})
 				events = append(events, opening...)
-				sc.activeTool = t
 				t.announced = true
-				t.stopped = false
 			}
 			if complete && t.args.Len() == 0 {
 				t.args.WriteString("{}")
