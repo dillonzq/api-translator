@@ -66,15 +66,16 @@ func ClaudeReasoningEffort(r *ClaudeRequestRecord) (string, *errclass.Error) {
 // through ClaudeImageURL; tool_use Input and tool_result Result stay raw
 // so each target renderer applies its own vocabulary and policies.
 type ClaudeBlock struct {
-	Media   *MediaPart
-	Kind    string          // text, image, document, tool_use, tool_result, thinking, redacted_thinking, or an unknown wire type
-	Text    string          // text blocks
-	URL     string          // image blocks: resolved http(s)/data URL
-	CallID  string          // tool_use "id" / tool_result "tool_use_id"
-	Name    string          // tool_use name
-	Input   json.RawMessage // tool_use arguments (absent → nil)
-	Result  json.RawMessage // tool_result payload (string or block array)
-	IsError bool            // tool_result is_error flag
+	Thinking string // readable thinking, separate from visible text
+	Media    *MediaPart
+	Kind     string          // text, image, document, tool_use, tool_result, thinking, redacted_thinking, or an unknown wire type
+	Text     string          // text blocks
+	URL      string          // image blocks: resolved http(s)/data URL
+	CallID   string          // tool_use "id" / tool_result "tool_use_id"
+	Name     string          // tool_use name
+	Input    json.RawMessage // tool_use arguments (absent → nil)
+	Result   json.RawMessage // tool_result payload (string or block array)
+	IsError  bool            // tool_result is_error flag
 }
 
 // ClaudeMessageRecord is one Anthropic Messages message turn: Content is
@@ -116,9 +117,10 @@ type claudeWireMessage struct {
 
 // claudeWireBlock mirrors the inbound Anthropic block shape (decode-only).
 type claudeWireBlock struct {
-	Type   string `json:"type"`
-	Text   string `json:"text"`
-	Source *struct {
+	Thinking string `json:"thinking"`
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Source   *struct {
 		Type      string `json:"type"` // base64 | url
 		MediaType string `json:"media_type"`
 		Data      string `json:"data"`
@@ -221,7 +223,8 @@ func decodeClaudeBlocks(raw json.RawMessage) ([]ClaudeBlock, *errclass.Error) {
 			return nil, errclass.Translation("malformed content block")
 		}
 		blk := ClaudeBlock{
-			Kind: wb.Type, Text: wb.Text,
+			Thinking: wb.Thinking,
+			Kind:     wb.Type, Text: wb.Text,
 			Name: wb.Name, Input: wb.Input,
 			Result: wb.Content, IsError: wb.IsError,
 		}

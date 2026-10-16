@@ -14,13 +14,32 @@ import (
 // text already delivered as deltas. Summary and content use separate keys.
 func (sc *StreamConverter) reasoningSnapshot(item functionCallItem) [][]byte {
 	var events [][]byte
-	for i, p := range item.Summary {
+	var summary, content strings.Builder
+	contentSent := false
+	for _, p := range item.Summary {
 		if p.Type == "summary_text" {
-			events = append(events, sc.reasoningPart(fmt.Sprintf("%s/summary/%d", item.ID, i), p.Text, true)...)
+			summary.WriteString(p.Text)
 		}
 	}
 	for i, p := range item.Content {
 		if p.Type == "reasoning_text" || p.Type == "text" {
+			content.WriteString(p.Text)
+			if sent := sc.reasoningParts[fmt.Sprintf("%s/content/%d", item.ID, i)]; sent != nil && sent.Len() > 0 {
+				contentSent = true
+			}
+		}
+	}
+	// Synthesized Responses items expose the same text for display and replay.
+	// Reconcile just one channel so the terminal content does not echo summary
+	// deltas back into Chat reasoning_content.
+	mirrored := summary.Len() > 0 && summary.String() == content.String()
+	for i, p := range item.Summary {
+		if p.Type == "summary_text" && !(mirrored && contentSent) {
+			events = append(events, sc.reasoningPart(fmt.Sprintf("%s/summary/%d", item.ID, i), p.Text, true)...)
+		}
+	}
+	for i, p := range item.Content {
+		if (p.Type == "reasoning_text" || p.Type == "text") && !(mirrored && !contentSent) {
 			events = append(events, sc.reasoningPart(fmt.Sprintf("%s/content/%d", item.ID, i), p.Text, true)...)
 		}
 	}

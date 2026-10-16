@@ -130,7 +130,7 @@ func TestBuildRequestClaude(t *testing.T) {
 	if user["content"] != "more" {
 		t.Fatalf("post-result text wrong: %v", user)
 	}
-	// thinking block dropped, tool_use kept: content null + tool_calls.
+	// Thinking and tool_use share the assistant message; visible content is null.
 	last := msgs[5].(map[string]any)
 	if last["role"] != "assistant" || last["content"] != nil {
 		t.Fatalf("thinking-only content wrong: %v", last)
@@ -267,16 +267,16 @@ func TestBuildRequestClaudeVariants(t *testing.T) {
 			t.Fatalf("assistant string content lost: %v", a)
 		}
 	})
-	t.Run("thinking-only assistant dropped", func(t *testing.T) {
+	t.Run("thinking-only assistant preserved", func(t *testing.T) {
 		m := mustBuild(t, "messages",
 			`{"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}]}]}`)
-		if msgs := m["messages"].([]any); len(msgs) != 0 {
-			t.Fatalf("thinking-only assistant not dropped: %v", msgs)
+		if msgs := m["messages"].([]any); len(msgs) != 1 || msgs[0].(map[string]any)["reasoning_content"] != "hmm" {
+			t.Fatalf("thinking-only assistant lost: %v", msgs)
 		}
 	})
 	// FR-005 omission policy parity: redacted_thinking is encrypted
 	// reasoning metadata with no Chat Completions representable payload —
-	// omitted like plain thinking, never a conversion failure (mirrors the
+	// omitted while plain thinking survives (mirrors the
 	// sibling Messages/Responses-route converters).
 	t.Run("redacted_thinking omitted alongside thinking", func(t *testing.T) {
 		m := mustBuild(t, "messages",
@@ -286,11 +286,11 @@ func TestBuildRequestClaudeVariants(t *testing.T) {
 			t.Fatalf("want one assistant message, got %d: %v", len(msgs), msgs)
 		}
 		a := msgs[0].(map[string]any)
-		if a["content"] != "answer" {
-			t.Fatalf("thinking blocks not omitted or text lost: %v", a)
+		if a["content"] != "answer" || a["reasoning_content"] != "hmm" {
+			t.Fatalf("reasoning or text lost: %v", a)
 		}
 	})
-	t.Run("redacted_thinking-only assistant dropped", func(t *testing.T) {
+	t.Run("redacted_thinking-only assistant preserved", func(t *testing.T) {
 		m := mustBuild(t, "messages",
 			`{"messages":[{"role":"assistant","content":[{"type":"redacted_thinking","data":"x"}]}]}`)
 		if msgs := m["messages"].([]any); len(msgs) != 0 {
@@ -346,8 +346,8 @@ func TestBuildRequestResponses(t *testing.T) {
 		t.Fatalf("envelope fields wrong: %v", m)
 	}
 	msgs := m["messages"].([]any)
-	if len(msgs) != 6 {
-		t.Fatalf("want 6 messages, got %d: %v", len(msgs), msgs)
+	if len(msgs) != 5 {
+		t.Fatalf("want 5 messages, got %d: %v", len(msgs), msgs)
 	}
 	if m0 := msgs[0].(map[string]any); m0["role"] != "system" || m0["content"] != "be nice" {
 		t.Fatalf("instructions message wrong: %v", m0)
@@ -362,7 +362,7 @@ func TestBuildRequestResponses(t *testing.T) {
 	if msgs[3].(map[string]any)["content"] != "a" {
 		t.Fatalf("assistant item wrong: %v", msgs[3])
 	}
-	merged := msgs[4].(map[string]any)
+	merged := msgs[3].(map[string]any)
 	calls := merged["tool_calls"].([]any)
 	if merged["role"] != "assistant" || len(calls) != 2 {
 		t.Fatalf("consecutive function_calls not merged: %v", merged)
@@ -374,7 +374,7 @@ func TestBuildRequestResponses(t *testing.T) {
 	if calls[1].(map[string]any)["function"].(map[string]any)["arguments"] != "{}" {
 		t.Fatalf("empty arguments not defaulted: %v", calls[1])
 	}
-	outMsg := msgs[5].(map[string]any)
+	outMsg := msgs[4].(map[string]any)
 	if outMsg["role"] != "tool" || outMsg["tool_call_id"] != "c1" || outMsg["content"] != "ok" {
 		t.Fatalf("function_call_output wrong: %v", outMsg)
 	}

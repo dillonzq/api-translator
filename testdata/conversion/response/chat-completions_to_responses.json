@@ -4,6 +4,12 @@
   "object": "response",
   "output": [
     {
+      "content": [
+        {
+          "text": "plan",
+          "type": "reasoning_text"
+        }
+      ],
       "id": "r_reasoning",
       "summary": [
         {

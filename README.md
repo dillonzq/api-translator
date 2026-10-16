@@ -27,6 +27,8 @@ Go module: `github.com/dillonzq/api-translator`; package: `translator`.
 
 All six cross-protocol directions are supported, along with same-protocol request model rewriting and response passthrough. Conversion covers text, image/file/audio/video input, function/custom tools, local shell adaptation, reasoning, usage, structured output, and representable URL citations. See [protocol conversion](docs/protocol-conversion.md) for media input directions and limits, tool identity restoration, hosted search, and streaming limits.
 
+Unreleased: historical reasoning text is preserved across request conversions and in synthesized Responses completion items for replay. Request replay does not substitute summaries for original reasoning; unavailable signatures and unrepresentable reasoning are reported through the loss policy. See the protocol conversion guide for limits.
+
 | Constant | Format value | Protocol |
 | --- | --- | --- |
 | `FormatChatCompletions` | `chat-completions` | Chat Completions |

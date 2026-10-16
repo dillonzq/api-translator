@@ -26,6 +26,7 @@ type CCToolCall struct {
 
 // CCMessage is one Chat Completions message.
 type CCMessage struct {
+	ReasoningFields
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 	Role         string          `json:"role"`
 	Content      json.RawMessage `json:"content"` // string or typed parts

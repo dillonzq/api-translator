@@ -198,6 +198,9 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Conve
 				req.Input = append(req.Input, msgItem(m.Role, parts))
 			}
 		case "assistant":
+			if text := m.ReasoningFields.ReplayText(); text != "" {
+				req.Input = append(req.Input, shared.ReasoningItem("", text))
+			}
 			parts, eErr := contentParts(m.Content, m.Role)
 			if eErr != nil {
 				return nil, eErr
@@ -267,9 +270,8 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Conve
 // Claude-request kernel; only target-shape rendering stays local.
 //
 // Explicit omission policy (FR-005 "where compatible"): stop_sequences is
-// dropped (no Responses equivalent); thinking/redacted_thinking blocks are
-// dropped because signed Anthropic chain-of-thought has no Responses input
-// representation (the thinking *control* maps to reasoning.effort); images
+// dropped (no Responses equivalent); readable thinking becomes reasoning
+// content while signatures and redacted_thinking remain unrepresentable; images
 // nested inside tool_result content are rejected descriptively, never
 // silently lost (FR-005). The tool_result is_error flag has no Responses
 // field and is preserved as an "[error] " marker in the output text rather
@@ -375,8 +377,16 @@ func fromClaudeMessages(upstreamModel string, body []byte, ctx ...*shared.Conver
 					"call_id": blk.CallID,
 					"output":  output,
 				})
-			case "thinking", "redacted_thinking":
-				// omitted per the FR-005 policy in the doc comment
+			case "thinking":
+				if m.Role != "assistant" {
+					return nil, shared.UnsupportedPartType(blk.Kind, EndpointPath)
+				}
+				if blk.Thinking != "" {
+					flush()
+					req.Input = append(req.Input, shared.ReasoningItem("", blk.Thinking))
+				}
+			case "redacted_thinking":
+				// Opaque provider data has no cross-protocol representation.
 			default:
 				flush()
 				return nil, shared.UnsupportedPartType(blk.Kind, EndpointPath)
