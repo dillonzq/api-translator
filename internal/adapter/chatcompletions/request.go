@@ -51,10 +51,11 @@ type ccContentPart struct {
 }
 
 type ccMessage struct {
-	Role       string              `json:"role"`
-	Content    any                 `json:"content"` // string, []ccContentPart, or nil
-	ToolCalls  []shared.CCToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string              `json:"tool_call_id,omitempty"`
+	ReasoningContent string              `json:"reasoning_content,omitempty"`
+	Role             string              `json:"role"`
+	Content          any                 `json:"content"` // string, []ccContentPart, or nil
+	ToolCalls        []shared.CCToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string              `json:"tool_call_id,omitempty"`
 }
 
 type ccRequest struct {
@@ -245,11 +246,9 @@ func claudeUserMessages(m *shared.ClaudeMessageRecord) ([]ccMessage, *errclass.E
 }
 
 // claudeAssistantMessage converts an assistant turn: text blocks join
-// the message content, tool_use blocks become tool_calls. Historical
-// thinking and redacted_thinking blocks have no Chat Completions
-// representation and are omitted by the FR-005 explicit omission policy
-// (the forward-looking control maps via effortFromBudget instead; the
-// redacted variant is pure encrypted metadata). Returns nil for empty turns.
+// the message content, tool_use blocks become tool_calls, and readable
+// thinking becomes reasoning_content. Opaque redacted blocks are omitted.
+// Returns nil for empty turns.
 func claudeAssistantMessage(m *shared.ClaudeMessageRecord) (*ccMessage, *errclass.Error) {
 	msg := &ccMessage{Role: "assistant"}
 	var sb strings.Builder
@@ -259,8 +258,10 @@ func claudeAssistantMessage(m *shared.ClaudeMessageRecord) (*ccMessage, *errclas
 		switch blk.Kind {
 		case "text":
 			sb.WriteString(blk.Text)
-		case "thinking", "redacted_thinking":
-			// omitted: no Chat Completions equivalent (FR-005 policy)
+		case "thinking":
+			msg.ReasoningContent += blk.Thinking
+		case "redacted_thinking":
+			// Provider-specific opaque data cannot be replayed as text.
 		case "tool_use":
 			tc := shared.CCToolCall{ID: blk.CallID, Type: "function"}
 			tc.Function.Name = blk.Name
@@ -273,7 +274,7 @@ func claudeAssistantMessage(m *shared.ClaudeMessageRecord) (*ccMessage, *errclas
 	if sb.Len() > 0 {
 		msg.Content = sb.String()
 	}
-	if msg.Content == nil && len(msg.ToolCalls) == 0 {
+	if msg.Content == nil && len(msg.ToolCalls) == 0 && msg.ReasoningContent == "" {
 		return nil, nil
 	}
 	return msg, nil
@@ -286,9 +287,8 @@ func claudeAssistantMessage(m *shared.ClaudeMessageRecord) (*ccMessage, *errclas
 // into assistant tool_calls, function_call_output items become role:"tool"
 // messages, reasoning.effort maps to reasoning_effort,
 // parallel_tool_calls passes through as-is (the reverse leg forwards the
-// same field), and max_output_tokens maps to max_tokens. Historical
-// reasoning items are omitted (no CC equivalent; FR-005 explicit omission
-// policy).
+// same field), and max_output_tokens maps to max_tokens. Original reasoning
+// content joins the assistant message containing the following text and calls.
 func responsesToChat(upstreamModel string, body []byte, tools *shared.ConversionContext) ([]byte, *errclass.Error) {
 	var src shared.ResponsesRequest
 	if err := json.Unmarshal(body, &src); err != nil {
@@ -346,7 +346,13 @@ func responsesToChat(upstreamModel string, body []byte, tools *shared.Conversion
 			toolImages = nil
 		}
 	}
+	// Reasoning begins an assistant segment; text and parallel tool calls
+	// belong to that segment until a user/tool/system boundary or new reasoning.
+	assistant := -1
 	for _, item := range items {
+		if item.Type == "function_call_output" || item.Type == "custom_tool_call_output" || (item.Type == "message" && item.Role != "assistant") {
+			assistant = -1
+		}
 		switch item.Type {
 		case "message":
 			if item.Role != "user" {
@@ -388,7 +394,14 @@ func responsesToChat(upstreamModel string, body []byte, tools *shared.Conversion
 			case "user", "assistant":
 				if content != nil {
 					flushToolImages()
-					out.Messages = append(out.Messages, ccMessage{Role: item.Role, Content: content})
+					if item.Role == "assistant" && assistant >= 0 && out.Messages[assistant].Content == nil {
+						out.Messages[assistant].Content = content
+					} else {
+						out.Messages = append(out.Messages, ccMessage{Role: item.Role, Content: content})
+						if item.Role == "assistant" {
+							assistant = len(out.Messages) - 1
+						}
+					}
 				}
 			default:
 				return nil, shared.ValidateRole(item.Role, EndpointPath)
@@ -404,16 +417,14 @@ func responsesToChat(upstreamModel string, body []byte, tools *shared.Conversion
 			tc.Function.Arguments = shared.DefaultArgs(args)
 			// Merge consecutive function_call items into one
 			// assistant message so multi-call turns round-trip.
-			if n := len(out.Messages); n > 0 {
-				last := &out.Messages[n-1]
-				if last.Role == "assistant" && last.Content == nil {
-					last.ToolCalls = append(last.ToolCalls, tc)
-					continue
-				}
+			if assistant >= 0 {
+				out.Messages[assistant].ToolCalls = append(out.Messages[assistant].ToolCalls, tc)
+				continue
 			}
 			out.Messages = append(out.Messages, ccMessage{
 				Role: "assistant", ToolCalls: []shared.CCToolCall{tc},
 			})
+			assistant = len(out.Messages) - 1
 		case "function_call_output", "custom_tool_call_output":
 			parts, eErr := shared.DecodeStringOrParts(item.Output, EndpointPath)
 			if eErr != nil {
@@ -442,7 +453,18 @@ func responsesToChat(upstreamModel string, body []byte, tools *shared.Conversion
 				Role: "tool", Content: text.String(), ToolCallID: item.CallID,
 			})
 		case "reasoning":
-			// omitted: no Chat Completions equivalent (FR-005 policy)
+			if assistant >= 0 && (out.Messages[assistant].Content != nil || len(out.Messages[assistant].ToolCalls) > 0) {
+				assistant = -1
+			}
+			if text := shared.ReasoningContent(item.Content); text != "" {
+				flushToolImages()
+				if assistant >= 0 && out.Messages[assistant].Content == nil && len(out.Messages[assistant].ToolCalls) == 0 {
+					out.Messages[assistant].ReasoningContent += text
+				} else {
+					out.Messages = append(out.Messages, ccMessage{Role: "assistant", ReasoningContent: text})
+					assistant = len(out.Messages) - 1
+				}
+			}
 		default:
 			return nil, shared.UnsupportedInputItemType(item.Type)
 		}

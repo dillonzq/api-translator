@@ -234,7 +234,7 @@ func TestUncacheableResponsesItems(t *testing.T) {
 		for _, policy := range []LossPolicy{LossPolicyAllow, LossPolicySafe, LossPolicyStrict} {
 			state := &RequestState{Options: ConversionOptions{LossPolicy: policy}}
 			out, err := ConvertRequest(FormatMessages, "m", FormatResponses, body, state)
-			if policy == LossPolicyStrict {
+			if policy == LossPolicyStrict || (policy == LossPolicySafe && summary != `[]`) {
 				if err == nil || out != nil {
 					t.Fatalf("strict accepted uncacheable items: %s", out)
 				}
@@ -245,12 +245,16 @@ func TestUncacheableResponsesItems(t *testing.T) {
 				if bytes.Contains(out, []byte(`"cache_control"`)) {
 					t.Fatalf("hint applied to thinking or neighboring block: %s", out)
 				}
-				if summary != `[]` && !bytes.Contains(out, []byte(`"thinking":"analysis"`)) {
-					t.Fatalf("reasoning lost: %s", out)
+				if bytes.Contains(out, []byte(`"thinking":"analysis"`)) {
+					t.Fatalf("summary promoted to original reasoning: %s", out)
 				}
 			}
 			losses := state.Diagnostics()
-			if len(losses) != 2 || losses[0].Path != "input[1].cache_control" || losses[1].Path != "input[2].cache_control" {
+			wantLosses := 2
+			if summary != `[]` {
+				wantLosses++
+			}
+			if len(losses) != wantLosses || losses[0].Path != "input[1].cache_control" || losses[1].Path != "input[2].cache_control" {
 				t.Fatalf("missing diagnostics: %v", losses)
 			}
 		}

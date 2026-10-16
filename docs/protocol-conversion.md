@@ -74,9 +74,9 @@ Non-streaming and streaming responses support all six cross-protocol directions:
 | Upstream → client | Preservation |
 | --- | --- |
 | Chat Completions → Messages | Readable reasoning becomes `thinking` blocks / `thinking_delta` |
-| Chat Completions → Responses | Readable reasoning becomes `reasoning.summary[]` (`type: summary_text`) and corresponding summary stream events |
+| Chat Completions → Responses | Readable reasoning is preserved in `reasoning.content[]` (`type: reasoning_text`), with a display copy in `summary[]` and corresponding summary stream events |
 | Messages → Chat Completions | Thinking text is merged into `message.reasoning_content` / `delta.reasoning_content` |
-| Messages → Responses | Each thinking block becomes a separate reasoning summary item |
+| Messages → Responses | Each thinking block becomes a separate reasoning item with replay content and a display summary |
 | Responses → Chat Completions | Reasoning `summary_text` and readable `content` (`reasoning_text` / `text`) are merged into `reasoning_content` |
 | Responses → Messages | The same readable reasoning becomes `thinking` blocks / `thinking_delta` |
 
@@ -132,7 +132,11 @@ Messages disables `thinking.display` when turning thinking off and supersedes `o
 
 Unknown suffixes can still be parsed and stripped, but leave body reasoning controls unchanged. Only call `StripSupersededReasoning` for a recognized suffix. Callers decide whether literal parenthesized model IDs should be routed as-is.
 
-Historical reasoning differs from reasoning controls: Messages → Chat/Responses drops historical thinking/redacted_thinking; Responses → Chat drops reasoning items; Chat → Messages/Responses does not map historical reasoning fields. Responses → Messages can retain summary text as unsigned thinking.
+Historical reasoning is mapped separately from reasoning controls. Chat assistant `reasoning_content` (or readable `reasoning` / `reasoning_details` aliases) and Messages assistant `thinking` are preserved as Responses `content` parts with `type: reasoning_text`. Responses original content maps back to Chat `reasoning_content`; the reasoning, assistant text, and following parallel calls share an assistant message, with tool results and user/system messages delimiting turns. Messages thinking maps to Chat reasoning on its original assistant message. Both Chat and Responses can produce unsigned Messages thinking under the default allow policy.
+
+Request replay never substitutes a Responses summary for original content. Summary-only history, differing summaries, opaque/encrypted records, unknown reasoning variants, and signature loss are reported as semantic losses; safe/strict policies reject them. Identical display summaries alongside preserved original content do not cause a loss diagnostic. Converting raw reasoning to Messages also reports a semantic loss because an authentic Anthropic signature is unavailable; safe/strict reject this best-effort mapping. Native requests preserve all original fields.
+
+Synthesized Responses non-streaming output, `response.output_item.done`, and terminal `response.output` retain original reasoning content for the next request. Summary events remain available for display. Mirrored summary/content snapshots are not emitted twice when converted back. This does not recover content already missing from a client's history, and callers must not subsequently strip preserved reasoning items. See [DeepSeek thinking replay requirements](https://api-docs.deepseek.com/guides/thinking_mode/) and [Anthropic thinking signatures](https://platform.claude.com/docs/en/docs/build-with-claude/extended-thinking).
 
 ## Response fields and usage
 
