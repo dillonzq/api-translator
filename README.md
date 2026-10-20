@@ -11,7 +11,7 @@
 [Install](#installation) · [Quick start](#quick-start) · [Streaming](#streaming-responses) · [Protocol docs](docs/protocol-conversion.md) · [Releases](https://github.com/dillonzq/api-translator/releases)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
-[![Release: v0.2.0](https://img.shields.io/badge/release-v0.2.0-6366f1?style=flat-square)](https://github.com/dillonzq/api-translator/releases/tag/v0.2.0)
+[![Release: v0.3.0](https://img.shields.io/badge/release-v0.3.0-6366f1?style=flat-square)](https://github.com/dillonzq/api-translator/releases/tag/v0.3.0)
 [![Go: 1.26.7+](https://img.shields.io/badge/Go-1.26.7%2B-0891b2?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![Dependencies: standard library](https://img.shields.io/badge/dependencies-standard_library-0d9488?style=flat-square)](go.mod)
 
@@ -27,7 +27,7 @@ Go module: `github.com/dillonzq/api-translator`; package: `translator`.
 
 All six cross-protocol directions are supported, along with same-protocol request model rewriting and response passthrough. Conversion covers text, image/file/audio/video input, function/custom tools, local shell adaptation, reasoning, usage, structured output, and representable URL citations. See [protocol conversion](docs/protocol-conversion.md) for media input directions and limits, tool identity restoration, hosted search, and streaming limits.
 
-Unreleased: historical reasoning text is preserved across request conversions and in synthesized Responses completion items for replay. Request replay does not substitute summaries for original reasoning; unavailable signatures and unrepresentable reasoning are reported through the loss policy. See the protocol conversion guide for limits. Unsigned Messages thinking is omitted by default; compatible upstreams can opt in with `state.Options.AllowUnsignedThinking = true`, while safe/strict rejection still applies.
+Starting with `v0.3.0`, historical reasoning text is preserved across request conversions and in synthesized Responses completion items for replay. Request replay does not substitute summaries for original reasoning; unavailable signatures and unrepresentable reasoning are reported through the loss policy. See the protocol conversion guide for limits. Unsigned Messages thinking is omitted by default; compatible upstreams can opt in with `state.Options.AllowUnsignedThinking = true`, while safe/strict rejection still applies.
 
 | Constant | Format value | Protocol |
 | --- | --- | --- |
@@ -40,10 +40,10 @@ Callers map external format identifiers to these constants. Only the three value
 ## Installation
 
 ```sh
-go get github.com/dillonzq/api-translator@v0.2.0
+go get github.com/dillonzq/api-translator@v0.3.0
 ```
 
-These documents describe the current source. File/audio/video input conversion and local shell adaptation are not included in `v0.2.0`; use a source build until they are released.
+File/audio/video input conversion, local shell adaptation, cache hint retention when converting to Messages, and reasoning history replay are available starting with `v0.3.0`. See the [release notes](docs/releases/v0.3.0.md) for upgrade considerations.
 
 ## Quick start
 
@@ -98,7 +98,7 @@ body, err := translator.NormalizeResponsesRequest(payload, state)
 
 This merges `additional_tools`, flattens namespaces, wraps custom tools and historical calls, adapts local shell declarations and history to a `shell` function, rewrites `tool_choice` (including `allowed_tools`), and registers identities for response restoration. Unknown fields, exact JSON numbers, tool-result images, and top-level hosted tools are preserved; callers check upstream hosted-tool support. Nested namespaces and hosted tools inside namespaces fail. Custom `format` constraints cannot be retained as function tools: they produce a semantic loss diagnostic, rejected by Safe/Strict policies. Failed normalization does not commit new identity mappings. Same-protocol `ConvertRequest` still only rewrites the model.
 
-`NormalizeResponsesRequest` and `SSEDecoder` are available starting with `v0.2.0`. The local shell support described here is unreleased; see [local shell adaptation](docs/protocol-conversion.md#local-shell-adaptation) for its direction and limits.
+`NormalizeResponsesRequest` and `SSEDecoder` are available starting with `v0.2.0`; local shell support starts with `v0.3.0`. See [local shell adaptation](docs/protocol-conversion.md#local-shell-adaptation) for its direction and limits.
 
 Repeated declarations of the same tool identity keep the first declaration. References in history and `tool_choice` must use original names and namespaces; conflicting identities that flatten to the same wire name are rejected.
 

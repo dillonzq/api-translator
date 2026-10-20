@@ -22,6 +22,7 @@ Requests dispatch by **target protocol**. Ordinary responses and streams dispatc
 | Shared `sse_framer.go`, `sse_encode.go` | SSE framing and encoding |
 | Shared `usage.go`, `terminal.go` | Usage and termination mappings |
 | Shared `tool_identity.go`, `responses_tools.go`, `normalize_responses.go` | Tool identity rules, cross-protocol normalization, explicit native normalization |
+| Shared `shell.go`, `reasoning.go`, `cache_control.go`; Messages `cache_control.go` | Local shell mapping/restoration, reasoning history, and cache hint retention added in `v0.3.0` |
 | Shared `context.go`, `diagnostic_collector.go`, `diagnostics.go` | Execution state, diagnostic collection, and loss rules |
 | `thinking` | Explicit reasoning controls and model suffixes |
 

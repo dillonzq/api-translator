@@ -11,7 +11,7 @@
 [安装](#安装) · [快速开始](#快速开始) · [流式响应](#流式响应) · [协议文档](docs/protocol-conversion.zh-CN.md) · [版本发布](https://github.com/dillonzq/api-translator/releases)
 
 [![许可证：MIT](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
-[![版本：v0.2.0](https://img.shields.io/badge/release-v0.2.0-6366f1?style=flat-square)](https://github.com/dillonzq/api-translator/releases/tag/v0.2.0)
+[![版本：v0.3.0](https://img.shields.io/badge/release-v0.3.0-6366f1?style=flat-square)](https://github.com/dillonzq/api-translator/releases/tag/v0.3.0)
 [![Go：1.26.7+](https://img.shields.io/badge/Go-1.26.7%2B-0891b2?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![依赖：标准库](https://img.shields.io/badge/dependencies-standard_library-0d9488?style=flat-square)](go.mod)
 
@@ -27,7 +27,7 @@ Go module：`github.com/dillonzq/api-translator`，包名：`translator`。
 
 三种协议支持全部六个跨协议方向，也支持同协议请求的模型改写及响应透传。转换覆盖文本、图片、文件、音频和视频输入、函数/custom 工具、本地 shell 适配、推理、usage、结构化输出和可表示的 URL 引用；媒体输入的方向与限制、工具身份恢复、托管搜索和流式限制见[协议转换说明](docs/protocol-conversion.zh-CN.md)。
 
-未发布变更：跨协议请求及合成的 Responses 完成项保留历史思考文本，供后续回传。请求回传不会用 summary 替代原始思考；缺失签名和不可表示的推理通过损失策略报告。具体限制见协议转换说明。 默认省略无签名 Messages thinking；支持该格式的上游可显式设置 `state.Options.AllowUnsignedThinking = true`，safe/strict 仍会拒绝对应损耗。
+从 `v0.3.0` 起，跨协议请求及合成的 Responses 完成项保留历史思考文本，供后续回传。请求回传不会用 summary 替代原始思考；缺失签名和不可表示的推理通过损失策略报告。具体限制见协议转换说明。默认省略无签名 Messages thinking；支持该格式的上游可显式设置 `state.Options.AllowUnsignedThinking = true`，safe/strict 仍会拒绝对应损耗。
 
 | 常量 | 格式值 | 协议 |
 | --- | --- | --- |
@@ -40,10 +40,10 @@ Go module：`github.com/dillonzq/api-translator`，包名：`translator`。
 ## 安装
 
 ```sh
-go get github.com/dillonzq/api-translator@v0.2.0
+go get github.com/dillonzq/api-translator@v0.3.0
 ```
 
-文档描述当前源码。文件、音频、视频输入转换及本地 shell 适配尚未包含在 `v0.2.0` 中；发布前需使用源码构建。
+文件、音频、视频输入转换、本地 shell 适配、转入 Messages 时保留缓存提示及推理历史回传从 `v0.3.0` 起可用。升级注意事项见[发布说明](docs/releases/v0.3.0.md)。
 
 ## 快速开始
 
@@ -98,7 +98,7 @@ body, err := translator.NormalizeResponsesRequest(payload, state)
 
 该入口合并 `additional_tools`，展开 namespace 工具，包装 custom 工具及历史调用，将本地 shell 声明和历史记录适配为 `shell` 函数，改写 `tool_choice`（包括 `allowed_tools`），并登记响应恢复所需的身份。未知字段、精确 JSON 数值、工具结果图片及顶层托管工具保留；调用方负责判断上游是否支持托管工具。嵌套 namespace 和 namespace 内的托管工具会报错。custom 的 `format` 约束无法在函数工具中保留，会记录语义损耗；Safe/Strict 策略拒绝此损耗。失败不会提交新的工具身份映射。原有同协议 `ConvertRequest` 仍仅改写模型。
 
-`NormalizeResponsesRequest` 与 `SSEDecoder` 从 `v0.2.0` 起可用。本文的本地 shell 支持尚未发布；适配方向与限制见[本地 shell 适配](docs/protocol-conversion.zh-CN.md#本地-shell-适配)。
+`NormalizeResponsesRequest` 与 `SSEDecoder` 从 `v0.2.0` 起可用，本地 shell 支持从 `v0.3.0` 起可用；适配方向与限制见[本地 shell 适配](docs/protocol-conversion.zh-CN.md#本地-shell-适配)。
 
 同一工具身份的重复声明保留首次声明。历史调用和 `tool_choice` 中的引用应使用原始名称及 namespace；不同身份展开后名称冲突时会报错。
 

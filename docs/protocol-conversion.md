@@ -4,6 +4,18 @@ English | [简体中文](protocol-conversion.zh-CN.md) · [Back to README](../RE
 
 This document describes the current mappings and limitations. All six cross-protocol directions support requests, ordinary responses, and streams. See the README for format identifiers and integration examples.
 
+## Feature versions
+
+| Capability | First release |
+| --- | --- |
+| `NormalizeResponsesRequest`, `SSEDecoder` | `v0.2.0` |
+| File/audio/video input mappings | `v0.3.0` |
+| Local Responses shell adaptation and restoration | `v0.3.0` |
+| Cache hint retention when converting to Messages | `v0.3.0` |
+| Original reasoning history replay, `AllowUnsignedThinking` | `v0.3.0` |
+
+See the [v0.3.0 release notes](releases/v0.3.0.md) for upgrade considerations. Direction and loss-policy limits still apply as described below.
+
 ## Native paths and responsibilities
 
 Same-protocol requests rewrite only `model`, preserving historical reasoning, compaction, roles, tools, and unknown fields. An unchanged model returns the original bytes. Model catalogs, routing, and upstream compatibility cleanup belong to callers.

@@ -32,6 +32,7 @@ flowchart TD
 | shared `sse_framer.go`、`sse_encode.go` | SSE 分帧和编码 |
 | shared `usage.go`、`terminal.go` | usage 和结束原因映射 |
 | shared `tool_identity.go`、`responses_tools.go`、`normalize_responses.go` | 工具身份规则、跨协议规范化和保留原生字段的显式规范化 |
+| shared `shell.go`、`reasoning.go`、`cache_control.go`；Messages `cache_control.go` | `v0.3.0` 新增的本地 shell 映射与恢复、推理历史和缓存提示保留 |
 | shared `context.go`、`diagnostic_collector.go`、`diagnostics.go` | 请求上下文、诊断收集与损耗规则 |
 | `thinking` | 显式推理控制和模型后缀 |
 
