@@ -21,6 +21,7 @@ type ReasoningFields struct {
 	ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
 }
 
+// Text selects the first readable reasoning alias for response display.
 func (r ReasoningFields) Text() string {
 	for _, raw := range []json.RawMessage{r.ReasoningContent, r.Reasoning, r.ReasoningDetails} {
 		var node any
@@ -86,6 +87,8 @@ func ReplayReasoningText(raw json.RawMessage) (string, bool) {
 	return s, complete
 }
 
+// reasoningText flattens readable response fragments while excluding typed
+// summaries and opaque provider records from replayable text.
 func reasoningText(node any) string {
 	switch v := node.(type) {
 	case string:

@@ -228,6 +228,8 @@ func TestToolResultCacheControlBoundaries(t *testing.T) {
 	}
 }
 
+// TestUncacheableResponsesItems checks cache-hint losses independently of
+// summary replay losses under each request policy.
 func TestUncacheableResponsesItems(t *testing.T) {
 	for _, summary := range []string{`[]`, `[{"type":"summary_text","text":"analysis"}]`} {
 		body := []byte(`{"input":[{"role":"user","content":"hello"},{"type":"additional_tools","tools":[{"type":"function","name":"f"}],"cache_control":{"type":"ephemeral"}},{"type":"reasoning","summary":` + summary + `,"cache_control":{"type":"ephemeral","ttl":"1h"}},{"role":"assistant","content":"answer"}]}`)

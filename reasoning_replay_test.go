@@ -21,7 +21,9 @@ func TestReasoningHistoryAllRequestRoutes(t *testing.T) {
 	for from, body := range sources {
 		for _, to := range formats {
 			t.Run(from+"/"+to, func(t *testing.T) {
-				out, err := translator.ConvertRequest(to, "deepseek-test", from, []byte(body), translator.NewRequestState())
+				state := translator.NewRequestState()
+				state.Options.AllowUnsignedThinking = true // Exercise the explicit compatible-upstream mapping.
+				out, err := translator.ConvertRequest(to, "deepseek-test", from, []byte(body), state)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -89,6 +91,8 @@ func TestReasoningHistoryAllRequestRoutes(t *testing.T) {
 	}
 }
 
+// TestReasoningReplayLossPolicy distinguishes representable original text
+// from summaries, opaque metadata, alias conflicts, and signature losses.
 func TestReasoningReplayLossPolicy(t *testing.T) {
 	cases := []struct {
 		name, from, to, body, path string
@@ -104,6 +108,8 @@ func TestReasoningReplayLossPolicy(t *testing.T) {
 		{"encrypted", "responses", "chat-completions", `{"input":[{"type":"reasoning","encrypted_content":"opaque"}]}`, "input[0].encrypted_content", true},
 		{"unknown-content", "responses", "chat-completions", `{"input":[{"type":"reasoning","content":[{"type":"future","text":"opaque"}]}]}`, "input[0].content", true},
 		{"opaque-alias", "chat-completions", "responses", `{"messages":[{"role":"assistant","reasoning_details":[{"type":"reasoning.encrypted","text":"opaque"}]}]}`, "messages[0].reasoning_details", true},
+		{"incomplete-empty-alias", "chat-completions", "responses", `{"messages":[{"role":"assistant","reasoning_content":"raw","reasoning_details":[{"type":"reasoning.encrypted"}]}]}`, "messages[0].reasoning_details", true},
+		{"non-assistant-empty-alias", "chat-completions", "responses", `{"messages":[{"role":"user","content":"hello","reasoning_details":[]}]}`, "messages[0].reasoning_details", true},
 		{"conflicting-alias", "chat-completions", "responses", `{"messages":[{"role":"assistant","reasoning_content":"raw","reasoning":"other"}]}`, "messages[0].reasoning", true},
 		{"signature", "messages", "chat-completions", `{"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"raw","signature":"opaque"}]}]}`, "messages[0].content[0].signature", true},
 		{"redacted", "messages", "responses", `{"messages":[{"role":"assistant","content":[{"type":"redacted_thinking","data":"opaque"}]}]}`, "messages[0].content[0]", true},
@@ -142,6 +148,8 @@ func TestReasoningReplayLossPolicy(t *testing.T) {
 	}
 }
 
+// TestDeepSeekResponseHistoryRequestRoundTrip replays ordinary and streamed
+// completion items across two tool rounds, checking text ownership and deduplication.
 func TestDeepSeekResponseHistoryRequestRoundTrip(t *testing.T) {
 	for _, streaming := range []bool{false, true} {
 		t.Run(fmt.Sprint(streaming), func(t *testing.T) {
@@ -220,6 +228,8 @@ func TestDeepSeekResponseHistoryRequestRoundTrip(t *testing.T) {
 	}
 }
 
+// TestReasoningHistoryBoundaries prevents prior reasoning from attaching to
+// a new call across user, system, tool-result, or reasoning boundaries.
 func TestReasoningHistoryBoundaries(t *testing.T) {
 	for _, boundary := range []string{
 		`{"type":"message","role":"user","content":"next"}`,
@@ -253,6 +263,8 @@ func TestReasoningHistoryBoundaries(t *testing.T) {
 	}
 }
 
+// TestNativeReasoningHistoryPreservesOpaqueData protects native passthrough
+// of reasoning, signatures, and encrypted fields even under strict policy.
 func TestNativeReasoningHistoryPreservesOpaqueData(t *testing.T) {
 	for from, body := range map[string]string{
 		"responses":        `{"input":[{"type":"reasoning","content":[{"type":"reasoning_text","text":"raw"}],"summary":[{"type":"summary_text","text":"different"}],"encrypted_content":"opaque","future":9007199254740993}]}`,
@@ -275,6 +287,8 @@ func TestNativeReasoningHistoryPreservesOpaqueData(t *testing.T) {
 	}
 }
 
+// TestOpaqueChatResponseIsNotReplayableReasoning prevents typed summary or
+// encrypted records from becoming synthesized original reasoning content.
 func TestOpaqueChatResponseIsNotReplayableReasoning(t *testing.T) {
 	for _, typ := range []string{"reasoning.encrypted", "reasoning.summary"} {
 		t.Run(typ, func(t *testing.T) {

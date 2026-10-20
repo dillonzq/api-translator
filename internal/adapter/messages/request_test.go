@@ -377,6 +377,8 @@ func TestResponsesStringInputAndInstructions(t *testing.T) {
 	}
 }
 
+// TestResponsesItems verifies block ordering and tool associations when
+// unsigned thinking is explicitly enabled for a compatible Messages upstream.
 func TestResponsesItems(t *testing.T) {
 	body := `{
 		"instructions":"sys",
@@ -394,10 +396,11 @@ func TestResponsesItems(t *testing.T) {
 		"tools":[{"type":"function","name":"f","description":"fd","parameters":{"type":"object"}}],
 		"reasoning":{"effort":"low"}
 	}`
-	m, eErr := respReq(t, body)
+	encoded, eErr := BuildRequest("m", "responses", []byte(body), &shared.ConversionContext{Options: shared.ConversionOptions{AllowUnsignedThinking: true}})
 	if eErr != nil {
 		t.Fatalf("unexpected error: %v", eErr)
 	}
+	m := decodeReq(t, encoded)
 	sysBlocks := m["system"].([]any)
 	if len(sysBlocks) != 2 ||
 		sysBlocks[0].(map[string]any)["text"] != "sys" ||

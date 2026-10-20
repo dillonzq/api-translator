@@ -38,7 +38,14 @@ type Diagnostic struct {
 // ConversionOptions belongs to one RequestState. Safe rejects semantic request
 // loss; Strict rejects all reported request loss. Responses report losses but
 // are never retried or rejected solely because of this option.
-type ConversionOptions struct{ LossPolicy LossPolicy }
+type ConversionOptions struct {
+	LossPolicy LossPolicy
+	// AllowUnsignedThinking opts into replaying cross-protocol reasoning as
+	// unsigned Messages thinking blocks, for upstreams that accept them.
+	// The default omits these blocks. Diagnostics and Safe/Strict rejection
+	// still apply when enabled; native Messages and response display are unchanged.
+	AllowUnsignedThinking bool
+}
 
 func (s *ConversionContext) Report(from, to, path string, semantic bool) {
 	s.Record(DiagnosticFor(from, to, path, semantic))
@@ -54,6 +61,9 @@ func DiagnosticFor(from, to, path string, semantic bool) Diagnostic {
 	path = errclass.Redact(path)
 	return Diagnostic{Code: "unrepresentable_field", Path: path, Message: "conversion cannot preserve " + path, Semantic: semantic, From: from, To: to}
 }
+
+// requestDiagnostics identifies known request losses at protocol field paths
+// without inspecting business data inside tool arguments or results.
 func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 	if from == to {
 		return nil
@@ -233,7 +243,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 					if text != "" && selectedKey == "" {
 						selectedKey = key
 					}
-					if HasContent(message[key]) && (!complete || text != selected || role != "assistant") {
+					if HasContent(message[key]) && (!complete || (text != "" && text != selected) || role != "assistant") {
 						add(path+"."+key, true)
 					}
 				}

@@ -80,6 +80,8 @@ func TestBuildRequestThinkingEffort(t *testing.T) {
 	}
 }
 
+// TestBuildRequestClaude verifies assistant reasoning and tools retain their
+// message ownership when translating Messages history to Chat.
 func TestBuildRequestClaude(t *testing.T) {
 	body := `{
 		"model":"x","max_tokens":256,"stream":true,"temperature":0.5,"top_p":0.9,
@@ -244,6 +246,8 @@ func TestBuildRequestClaudeImageURLs(t *testing.T) {
 	}
 }
 
+// TestBuildRequestClaudeVariants covers empty turns, readable thinking,
+// opaque redacted blocks, and tool-result defaults.
 func TestBuildRequestClaudeVariants(t *testing.T) {
 	t.Run("string system field", func(t *testing.T) {
 		m := mustBuild(t, "messages", `{"system":"plain","messages":[{"role":"user","content":"hi"}]}`)
@@ -325,6 +329,8 @@ func TestBuildRequestClaudeVariants(t *testing.T) {
 	})
 }
 
+// TestBuildRequestResponses checks the Responses envelope and the grouping
+// of assistant text, parallel calls, and their tool results in Chat history.
 func TestBuildRequestResponses(t *testing.T) {
 	body := `{
 		"model":"x","max_output_tokens":99,"temperature":0.7,

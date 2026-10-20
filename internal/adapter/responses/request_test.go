@@ -301,6 +301,8 @@ func TestFromChatCompletionsErrors(t *testing.T) {
 
 // ---- Claude Messages source ---------------------------------------------
 
+// TestFromClaudeMessagesFull preserves readable thinking, text, tool ordering,
+// and result error markers in a complete Messages-to-Responses request.
 func TestFromClaudeMessagesFull(t *testing.T) {
 	body := `{
 		"model":"opencode-go/gpt-5.6-luna","max_tokens":512,"stream":true,"temperature":0.3,"top_p":0.8,

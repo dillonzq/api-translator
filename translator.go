@@ -24,6 +24,8 @@ type RequestState struct {
 	context shared.ConversionContext
 }
 
+// NewRequestState creates execution state with the default allow loss policy.
+// Unsigned Messages thinking is omitted unless explicitly enabled in Options.
 func NewRequestState() *RequestState { return &RequestState{} }
 
 func conversionContext(state *RequestState) *shared.ConversionContext {
