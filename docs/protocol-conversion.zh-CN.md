@@ -74,9 +74,9 @@ Messages 查询缺少对应搜索结果时，普通与流式转换均将搜索 i
 | 上游 → 客户端 | 保留方式 |
 | --- | --- |
 | Chat Completions → Messages | 可读推理映射为 `thinking` 块 / `thinking_delta` |
-| Chat Completions → Responses | 可读推理映射为 `reasoning.summary[]`（`type: summary_text`）和对应 summary 流式事件 |
+| Chat Completions → Responses | 可读推理保存在 `reasoning.content[]`（`type: reasoning_text`），同时提供 `summary[]` 展示副本和对应 summary 流式事件 |
 | Messages → Chat Completions | `thinking` 文本合并到 `message.reasoning_content` / `delta.reasoning_content` |
-| Messages → Responses | 每个 `thinking` 块映射为独立 reasoning summary item |
+| Messages → Responses | 每个 `thinking` 块映射为独立 reasoning item，包含回传 content 和展示 summary |
 | Responses → Chat Completions | reasoning item 的 `summary_text` 与可读 `content`（`reasoning_text` / `text`）合并到 `reasoning_content` |
 | Responses → Messages | 同样的可读推理映射为 `thinking` 块 / `thinking_delta` |
 
@@ -132,7 +132,11 @@ Messages 禁用时移除 `thinking.display`，后缀覆盖 `output_config.effort
 
 未知后缀仍可被解析并剥离，但不改变请求体推理参数。`StripSupersededReasoning` 只应在后缀已识别时调用。真实包含括号的模型 ID 是否按字面名称路由，由调用方决定。
 
-历史推理与推理控制不同：Messages → Chat/Responses 丢弃历史 thinking/redacted_thinking；Responses → Chat 丢弃 reasoning items；Chat → Messages/Responses 不映射历史推理字段。Responses → Messages 可保留 summary 为无签名 thinking。
+历史推理与推理控制分别映射。Chat assistant 的 `reasoning_content`（或可读的 `reasoning` / `reasoning_details` 别名）与 Messages assistant 的 `thinking` 保留为 Responses `content` 中的 `reasoning_text`。Responses 原始 content 映射回 Chat `reasoning_content`，思考、assistant 正文和随后并行工具调用归入同一消息；工具结果及 user/system 消息划分轮次。Messages thinking 转为原 assistant 消息的 Chat reasoning。Chat → Messages 和 Responses → Messages 默认省略无签名 thinking，nil 或零值状态也采用这一行为。仅在上游明确支持无签名 thinking 时，配合默认或 `LossPolicyAllow` 策略显式设置 `state.Options.AllowUnsignedThinking = true`。该选项只影响请求转换，不改变原生 Messages 历史或响应展示。
+
+请求回传不会用 Responses summary 替代原始 content。只有 summary 的历史、与原文不同的 summary、加密/不透明内容、未知推理格式及签名丢失均报告为语义损失，safe/strict 策略拒绝转换。与已保留原文完全相同的展示 summary 不报告损失。完整但为空的 Chat reasoning 别名不会与可读别名冲突；不完整别名及非空冲突值仍报告损失。转入 Messages 时无法生成真实 Anthropic 签名，也会报告语义损失；即使启用 `AllowUnsignedThinking`，safe/strict 仍拒绝转换。无论默认省略还是显式允许发送，都记录 `unsigned_thinking` 诊断。同协议仍保留原字段。
+
+合成的 Responses 普通响应、`response.output_item.done` 和终止 `response.output` 都保留原始 reasoning content，供下一次请求回传；summary 事件继续用于展示。再次转换时，相同的 summary/content 快照不会重复输出。这无法恢复客户端历史中已经丢失的原文，调用方也不能在转换后再次删除 reasoning。参见 [DeepSeek 思考回传要求](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)及 [Anthropic thinking 签名](https://platform.claude.com/docs/en/docs/build-with-claude/extended-thinking)。
 
 ## 响应字段与 usage
 

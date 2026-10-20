@@ -377,6 +377,8 @@ func TestResponsesStringInputAndInstructions(t *testing.T) {
 	}
 }
 
+// TestResponsesItems verifies block ordering and tool associations when
+// unsigned thinking is explicitly enabled for a compatible Messages upstream.
 func TestResponsesItems(t *testing.T) {
 	body := `{
 		"instructions":"sys",
@@ -389,15 +391,16 @@ func TestResponsesItems(t *testing.T) {
 			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"calling"}]},
 			{"type":"function_call","call_id":"fc_1","name":"f","arguments":"{\"a\":1}"},
 			{"type":"function_call_output","call_id":"fc_1","output":"out"},
-			{"type":"reasoning","summary":[{"type":"summary_text","text":"thought A"},{"type":"summary_text","text":"thought B"}]}
+			{"type":"reasoning","summary":[{"type":"summary_text","text":"display only"}],"content":[{"type":"reasoning_text","text":"thought A"},{"type":"reasoning_text","text":"thought B"}]}
 		],
 		"tools":[{"type":"function","name":"f","description":"fd","parameters":{"type":"object"}}],
 		"reasoning":{"effort":"low"}
 	}`
-	m, eErr := respReq(t, body)
+	encoded, eErr := BuildRequest("m", "responses", []byte(body), &shared.ConversionContext{Options: shared.ConversionOptions{AllowUnsignedThinking: true}})
 	if eErr != nil {
 		t.Fatalf("unexpected error: %v", eErr)
 	}
+	m := decodeReq(t, encoded)
 	sysBlocks := m["system"].([]any)
 	if len(sysBlocks) != 2 ||
 		sysBlocks[0].(map[string]any)["text"] != "sys" ||
@@ -431,7 +434,7 @@ func TestResponsesItems(t *testing.T) {
 		t.Errorf("function_call_output block = %v", out)
 	}
 	th := msgs[3].(map[string]any)["content"].([]any)[0].(map[string]any)
-	if th["type"] != "thinking" || th["thinking"] != "thought A\nthought B" {
+	if th["type"] != "thinking" || th["thinking"] != "thought Athought B" {
 		t.Errorf("reasoning block = %v", th)
 	}
 	thb := m["thinking"].(map[string]any)

@@ -350,16 +350,19 @@ func responsesToClaude(body []byte, tools ...*shared.ConversionContext) ([]byte,
 // reasoningText retains summaries and visible reasoning_text/text content
 // emitted by compatible providers.
 func (item respOutputItem) reasoningText() string {
-	var b strings.Builder
+	var summary, content strings.Builder
 	for _, part := range item.Summary {
 		if part.Type == "summary_text" {
-			b.WriteString(part.Text)
+			summary.WriteString(part.Text)
 		}
 	}
 	for _, part := range item.Content {
 		if part.Type == "reasoning_text" || part.Type == "text" {
-			b.WriteString(part.Text)
+			content.WriteString(part.Text)
 		}
 	}
-	return b.String()
+	if summary.String() == content.String() {
+		return content.String()
+	}
+	return summary.String() + content.String()
 }

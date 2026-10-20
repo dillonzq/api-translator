@@ -38,7 +38,14 @@ type Diagnostic struct {
 // ConversionOptions belongs to one RequestState. Safe rejects semantic request
 // loss; Strict rejects all reported request loss. Responses report losses but
 // are never retried or rejected solely because of this option.
-type ConversionOptions struct{ LossPolicy LossPolicy }
+type ConversionOptions struct {
+	LossPolicy LossPolicy
+	// AllowUnsignedThinking opts into replaying cross-protocol reasoning as
+	// unsigned Messages thinking blocks, for upstreams that accept them.
+	// The default omits these blocks. Diagnostics and Safe/Strict rejection
+	// still apply when enabled; native Messages and response display are unchanged.
+	AllowUnsignedThinking bool
+}
 
 func (s *ConversionContext) Report(from, to, path string, semantic bool) {
 	s.Record(DiagnosticFor(from, to, path, semantic))
@@ -54,6 +61,9 @@ func DiagnosticFor(from, to, path string, semantic bool) Diagnostic {
 	path = errclass.Redact(path)
 	return Diagnostic{Code: "unrepresentable_field", Path: path, Message: "conversion cannot preserve " + path, Semantic: semantic, From: from, To: to}
 }
+
+// requestDiagnostics identifies known request losses at protocol field paths
+// without inspecting business data inside tool arguments or results.
 func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 	if from == to {
 		return nil
@@ -64,6 +74,11 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 	}
 	var out []Diagnostic
 	add := func(path string, semantic bool) { out = append(out, DiagnosticFor(from, to, path, semantic)) }
+	unsignedThinking := func(path string) {
+		out = append(out, Diagnostic{Code: "unsigned_thinking", Path: path,
+			Message:  "conversion cannot create a valid Messages thinking signature for " + path,
+			Semantic: true, From: from, To: to})
+	}
 	// Top-level fields supported by the direct converters. Mapped controls are
 	// handled separately; unknown extension fields are reported rather than hidden.
 	supported := map[string]bool{"model": true, "stream": true, "temperature": true, "top_p": true, "tools": true, "tool_choice": true, "parallel_tool_calls": true}
@@ -176,7 +191,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 				}
 			}
 		}
-		if from == FormatMessages && (typ == "thinking" || typ == "redacted_thinking") {
+		if from == FormatMessages && typ == "redacted_thinking" {
 			add(path, true)
 		}
 		for _, key := range []string{"cache_control", "signature"} {
@@ -187,7 +202,7 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 				lostCache = (typ == "text" || typ == "input_text" || typ == "output_text") && text == ""
 			}
 			if HasContent(block[key]) && (key != "cache_control" || lostCache) {
-				add(path+"."+key, false)
+				add(path+"."+key, key == "signature" && typ == "thinking")
 			}
 		}
 	}
@@ -220,10 +235,21 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 				}
 			}
 			if from == FormatChatCompletions {
-				for _, key := range []string{"reasoning_content", "reasoning_details", "reasoning"} {
-					if len(message[key]) > 0 {
+				fields := ReasoningFields{ReasoningContent: message["reasoning_content"], Reasoning: message["reasoning"], ReasoningDetails: message["reasoning_details"]}
+				selected := fields.ReplayText()
+				selectedKey := ""
+				for _, key := range []string{"reasoning_content", "reasoning", "reasoning_details"} {
+					text, complete := ReplayReasoningText(message[key])
+					if text != "" && selectedKey == "" {
+						selectedKey = key
+					}
+					if HasContent(message[key]) && (!complete || (text != "" && text != selected) || role != "assistant") {
 						add(path+"."+key, true)
 					}
+				}
+				if role == "assistant" && selected != "" && to == FormatMessages {
+					// Text survives, but an authentic Anthropic signature cannot.
+					unsignedThinking(path + "." + selectedKey)
 				}
 			}
 			var blocks []map[string]json.RawMessage
@@ -249,10 +275,32 @@ func requestDiagnostics(from, to string, body []byte) []Diagnostic {
 			var typ string
 			DecodeProbe(item["type"], &typ)
 			if typ == "reasoning" {
-				if to == FormatChatCompletions {
-					add(path, true)
+				text := ReasoningContent(item["content"])
+				if HasContent(item["content"]) {
+					var parts []map[string]json.RawMessage
+					valid := json.Unmarshal(item["content"], &parts) == nil
+					for _, p := range parts {
+						var kind, value string
+						DecodeProbe(p["type"], &kind)
+						valid = valid && kind == "reasoning_text" && json.Unmarshal(p["text"], &value) == nil && len(p) == 2
+					}
+					if !valid {
+						add(path+".content", true)
+					}
 				}
-				if len(item["encrypted_content"]) > 0 {
+				var summary []ReasoningSummary
+				DecodeProbe(item["summary"], &summary)
+				var summaryText strings.Builder
+				for _, p := range summary {
+					summaryText.WriteString(p.Text)
+				}
+				if summaryText.Len() > 0 && summaryText.String() != text {
+					add(path+".summary", true)
+				}
+				if text != "" && to == FormatMessages {
+					unsignedThinking(path + ".content")
+				}
+				if HasContent(item["encrypted_content"]) {
 					add(path+".encrypted_content", true)
 				}
 			}

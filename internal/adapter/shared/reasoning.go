@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// CCResponseMessage extends the response wire shape without changing request decoding.
+// CCResponseMessage emits the canonical reasoning_content field.
 type CCResponseMessage struct {
 	CCMessage
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
@@ -21,6 +21,7 @@ type ReasoningFields struct {
 	ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
 }
 
+// Text selects the first readable reasoning alias for response display.
 func (r ReasoningFields) Text() string {
 	for _, raw := range []json.RawMessage{r.ReasoningContent, r.Reasoning, r.ReasoningDetails} {
 		var node any
@@ -33,6 +34,61 @@ func (r ReasoningFields) Text() string {
 	return ""
 }
 
+// ReplayText excludes summaries and opaque provider records. Response display
+// parsing is intentionally more permissive than request replay parsing.
+func (r ReasoningFields) ReplayText() string {
+	for _, raw := range []json.RawMessage{r.ReasoningContent, r.Reasoning, r.ReasoningDetails} {
+		if text, _ := ReplayReasoningText(raw); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+// ReplayReasoningText also reports whether the entire field is representable.
+// Metadata, encryption, signatures and unknown variants are never plain text.
+func ReplayReasoningText(raw json.RawMessage) (string, bool) {
+	if !HasContent(raw) {
+		return "", true
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s, true
+	}
+	var parts []json.RawMessage
+	if json.Unmarshal(raw, &parts) == nil {
+		var b strings.Builder
+		complete := true
+		for _, p := range parts {
+			text, ok := ReplayReasoningText(p)
+			b.WriteString(text)
+			complete = complete && ok
+		}
+		return b.String(), complete
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return "", false
+	}
+	var typ string
+	DecodeProbe(obj["type"], &typ)
+	if typ != "" && typ != "text" && typ != "reasoning_text" && typ != "reasoning.text" {
+		return "", false
+	}
+	if json.Unmarshal(obj["text"], &s) != nil {
+		return "", false
+	}
+	complete := true
+	for k := range obj {
+		if k != "type" && k != "text" {
+			complete = false
+		}
+	}
+	return s, complete
+}
+
+// reasoningText flattens readable response fragments while excluding typed
+// summaries and opaque provider records from replayable text.
 func reasoningText(node any) string {
 	switch v := node.(type) {
 	case string:
@@ -44,6 +100,9 @@ func reasoningText(node any) string {
 		}
 		return b.String()
 	case map[string]any:
+		if typ, _ := v["type"].(string); typ != "" && typ != "text" && typ != "reasoning_text" && typ != "reasoning.text" {
+			return ""
+		}
 		if text, ok := v["text"].(string); ok {
 			return text
 		}
@@ -51,10 +110,27 @@ func reasoningText(node any) string {
 	return ""
 }
 
-// ReasoningItem carries visible reasoning as a Responses summary without
-// fabricating encrypted_content or a provider signature.
+// ReasoningContent decodes replayable Responses content. A display summary is
+// deliberately not a fallback for missing original reasoning.
+func ReasoningContent(raw json.RawMessage) string {
+	var parts []ReasoningSummary
+	if json.Unmarshal(raw, &parts) != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		if p.Type == "reasoning_text" {
+			b.WriteString(p.Text)
+		}
+	}
+	return b.String()
+}
+
+// ReasoningItem keeps the source text available for replay in content as well
+// as display in summary. No encryption or provider signature is fabricated.
 func ReasoningItem(id, text string) RespItem {
-	return RespItem{Type: "reasoning", ID: id, Summary: []ReasoningSummary{{Type: "summary_text", Text: text}}}
+	content, _ := json.Marshal([]ReasoningSummary{{Type: "reasoning_text", Text: text}})
+	return RespItem{Type: "reasoning", ID: id, Content: content, Summary: []ReasoningSummary{{Type: "summary_text", Text: text}}}
 }
 
 type ReasoningSummary struct {

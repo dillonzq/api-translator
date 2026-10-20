@@ -301,6 +301,8 @@ func TestFromChatCompletionsErrors(t *testing.T) {
 
 // ---- Claude Messages source ---------------------------------------------
 
+// TestFromClaudeMessagesFull preserves readable thinking, text, tool ordering,
+// and result error markers in a complete Messages-to-Responses request.
 func TestFromClaudeMessagesFull(t *testing.T) {
 	body := `{
 		"model":"opencode-go/gpt-5.6-luna","max_tokens":512,"stream":true,"temperature":0.3,"top_p":0.8,
@@ -350,7 +352,7 @@ func TestFromClaudeMessagesFull(t *testing.T) {
 		t.Errorf("tool = %v", tl)
 	}
 	items := inputItems(t, m)
-	if len(items) != 10 {
+	if len(items) != 11 {
 		t.Fatalf("items = %d: %v", len(items), items)
 	}
 	if p := partMap(t, itemMap(t, items, 0), 0); p["type"] != "input_text" || p["text"] != "hello" {
@@ -363,32 +365,35 @@ func TestFromClaudeMessagesFull(t *testing.T) {
 	if p := partMap(t, a, 0); p["type"] != "output_text" || p["text"] != "working" {
 		t.Errorf("assistant part = %v", p)
 	}
+	if r := itemMap(t, items, 2); r["type"] != "reasoning" || partMap(t, r, 0)["text"] != "hmm" {
+		t.Fatalf("thinking lost: %v", r)
+	}
 	for i, want := range []struct{ id, args string }{
 		{"tu_1", `{"q":"x"}`}, {"tu_2", "{}"}, {"tu_3", "{}"},
 	} {
-		fc := itemMap(t, items, 2+i)
+		fc := itemMap(t, items, 3+i)
 		if fc["type"] != "function_call" || fc["call_id"] != want.id || fc["arguments"] != want.args {
 			t.Errorf("function_call %d = %v, want %+v", i, fc, want)
 		}
 	}
-	fco := itemMap(t, items, 5)
+	fco := itemMap(t, items, 6)
 	if fco["output"] != "ok" || fco["call_id"] != "tu_1" {
 		t.Errorf("tool output 0 = %v", fco)
 	}
-	if got := itemMap(t, items, 6)["output"]; got != "part" {
+	if got := itemMap(t, items, 7)["output"]; got != "part" {
 		t.Errorf("tool output 1 = %v, want text only", got)
 	}
-	if got := itemMap(t, items, 7)["output"]; got != "[error] boom" {
+	if got := itemMap(t, items, 8)["output"]; got != "[error] boom" {
 		t.Errorf("is_error marker = %v", got)
 	}
-	img := itemMap(t, items, 8)
+	img := itemMap(t, items, 9)
 	if img["role"] != "user" {
 		t.Fatalf("item8 = %v", img)
 	}
 	if p := partMap(t, img, 0); p["type"] != "input_image" || p["image_url"] != "data:image/png;base64,AAAA" {
 		t.Errorf("base64 image part = %v", p)
 	}
-	if p := partMap(t, itemMap(t, items, 9), 0); p["text"] != "done" {
+	if p := partMap(t, itemMap(t, items, 10), 0); p["text"] != "done" {
 		t.Errorf("item9 = %v", p)
 	}
 }

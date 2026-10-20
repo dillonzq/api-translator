@@ -27,6 +27,8 @@ Go module：`github.com/dillonzq/api-translator`，包名：`translator`。
 
 三种协议支持全部六个跨协议方向，也支持同协议请求的模型改写及响应透传。转换覆盖文本、图片、文件、音频和视频输入、函数/custom 工具、本地 shell 适配、推理、usage、结构化输出和可表示的 URL 引用；媒体输入的方向与限制、工具身份恢复、托管搜索和流式限制见[协议转换说明](docs/protocol-conversion.zh-CN.md)。
 
+未发布变更：跨协议请求及合成的 Responses 完成项保留历史思考文本，供后续回传。请求回传不会用 summary 替代原始思考；缺失签名和不可表示的推理通过损失策略报告。具体限制见协议转换说明。 默认省略无签名 Messages thinking；支持该格式的上游可显式设置 `state.Options.AllowUnsignedThinking = true`，safe/strict 仍会拒绝对应损耗。
+
 | 常量 | 格式值 | 协议 |
 | --- | --- | --- |
 | `FormatChatCompletions` | `chat-completions` | Chat Completions |

@@ -3,7 +3,6 @@ package messages
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/dillonzq/api-translator/internal/adapter/shared"
 	"github.com/dillonzq/api-translator/internal/errclass"
@@ -223,6 +222,7 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Conve
 		return nil, eErr
 	}
 	req.StopSequences = stop
+	allowUnsignedThinking := shared.ContextOrNew(ctx).Options.AllowUnsignedThinking
 
 	var system []string
 	var systemBlocks []anthropicBlock
@@ -243,6 +243,9 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Conve
 			applyCacheControl(blocks, m.CacheControl)
 			systemBlocks = append(systemBlocks, blocks...)
 		case "assistant":
+			if text := m.ReasoningFields.ReplayText(); text != "" && allowUnsignedThinking {
+				b.add("assistant", "assistant", anthropicBlock{"type": "thinking", "thinking": text})
+			}
 			blocks, eErr := contentParts(m.Content)
 			if eErr != nil {
 				return nil, eErr
@@ -323,8 +326,8 @@ func fromChatCompletions(upstreamModel string, body []byte, ctx ...*shared.Conve
 // fromResponses translates an OpenAI Responses request into a Messages
 // request (FR-005): instructions become the system field, message items
 // map like Chat Completions messages, function_call/function_call_output
-// items map to tool_use/tool_result blocks, reasoning summaries are kept
-// as best-effort thinking blocks (signatures unavailable upstream).
+// items map to tool_use/tool_result blocks. Original reasoning content becomes
+// unsigned thinking only when explicitly enabled for a compatible upstream.
 func fromResponses(upstreamModel string, body []byte, tools *shared.ConversionContext) ([]byte, *errclass.Error) {
 	var src shared.ResponsesRequest
 	if err := json.Unmarshal(body, &src); err != nil {
@@ -421,19 +424,11 @@ func fromResponses(upstreamModel string, body []byte, tools *shared.ConversionCo
 			}
 			b.add("user:tool", "user", block)
 		case "reasoning":
-			// Best-effort: keep summary text as a thinking block;
-			// encrypted_content has no Anthropic equivalent, so the
-			// signature is omitted rather than fabricated (FR-005).
-			var sb strings.Builder
-			for i, s := range item.Summary {
-				if i > 0 {
-					sb.WriteString("\n")
-				}
-				sb.WriteString(s.Text)
-			}
-			if sb.Len() > 0 {
+			// A summary cannot stand in for original reasoning. Signatures
+			// cannot be manufactured; the public loss policy reports this.
+			if text := shared.ReasoningContent(item.Content); text != "" && tools.Options.AllowUnsignedThinking {
 				b.add("assistant", "assistant", anthropicBlock{
-					"type": "thinking", "thinking": sb.String(),
+					"type": "thinking", "thinking": text,
 				})
 			}
 		default:
